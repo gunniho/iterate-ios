@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Iterate",
+  "description": "Ask Iterate about a page or save a selection to your mind.",
+  "version": "1.0",
+  "action": {
+    "default_title": "Ask Iterate",
+    "default_popup": "popup.html",
+    "default_icon": "toolbar-icon.svg"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "nativeMessaging"
+  ],
+  "icons": {
+    "128": "icon.png"
+  }
+}

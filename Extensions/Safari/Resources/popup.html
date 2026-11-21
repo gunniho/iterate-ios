@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Iterate</title>
+  <link rel="stylesheet" href="popup.css">
+  <script src="popup.js" type="module"></script>
+</head>
+<body>
+  <main>
+    <h1>Iterate</h1>
+    <p id="title"></p>
+    <p id="url"></p>
+    <blockquote id="selection" hidden></blockquote>
+    <label for="question">Question</label>
+    <textarea id="question" rows="2" maxlength="2000" placeholder="What would you like to know?"></textarea>
+    <div class="actions">
+      <button id="ask" disabled>Ask Iterate</button>
+      <button id="remember" disabled>Remember this</button>
+      <button id="check" hidden>Check reply</button>
+    </div>
+    <p id="result" role="status" aria-live="polite"></p>
+    <a id="continue" target="_blank" rel="noopener noreferrer" hidden>Continue in browser</a>
+  </main>
+</body>
+</html>

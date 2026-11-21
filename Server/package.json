@@ -1,0 +1,6 @@
+{
+  "name": "iterate-ios-backend",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" }
+}

@@ -1,0 +1,246 @@
+import AppIntents
+import LockedCameraCapture
+import SwiftUI
+
+@MainActor
+struct IterateWindow: View {
+    let connection: MindConnection
+    @EnvironmentObject private var scene: IterateShortcutScene
+
+    var body: some View {
+        IterateWorkspace(connection: connection, requestedAgents: scene.requestedAgents, consume: scene.consume)
+    }
+}
+
+@MainActor
+struct IterateWorkspace: View {
+    private enum Screen: Hashable { case pair, assistant, capture, settings, agent(String), newAgent(AgentConversation) }
+    private struct BrowserPage: Identifiable { let id: URL }
+
+    let connection: MindConnection
+    private let requestedAgents: [AgentConversation]
+    private let consume: ([AgentConversation]) -> Void
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var path: [Screen]
+    @State private var captureMode: IterateCaptureMode = .library
+    @State private var captureVisit = UUID()
+    @State private var lockedPhotoID: UUID?
+    @State private var showBriefing = false
+    @State private var browser: BrowserPage?
+    @State private var message: String?
+    @State private var pendingRoute: NativeDestination?
+
+    init(connection: MindConnection, requestedAgents: [AgentConversation], consume: @escaping ([AgentConversation]) -> Void) {
+        self.connection = connection
+        self.requestedAgents = requestedAgents
+        self.consume = consume
+        _path = State(initialValue: requestedAgents.map(Screen.newAgent))
+    }
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            AgentsHome(connection: connection, isVisible: path.isEmpty, connect: pair) { path.append(.agent($0.path)) }
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu {
+                            Button { path = [.assistant] } label: { Label("Assistant", systemImage: "waveform") }
+                            Button { path = [.settings] } label: { Label("Settings", systemImage: "gearshape") }
+                        } label: { Image(systemName: "ellipsis.circle") }
+                        .accessibilityLabel("Iterate actions")
+                    }
+                }
+                .navigationDestination(for: Screen.self, destination: screen)
+        }
+        .tint(.accentColor)
+        .onAppear {
+            IterateCameraLaunch.bind { showCapture(.camera) }
+            if let destination = NativeRouteBus.shared.take() { route(destination, startVoice: true) }
+        }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            if phase == .active { connection.activate() }
+            else if phase == .background { connection.background() }
+        }
+        .onChange(of: connection.pairing, initial: true) { _, pairing in
+            guard pairing != .checking else { return }
+            let paired = connection.hasSavedSession
+            if !paired, IterateCompanions.shared.paired { clearPrivateState() }
+            IterateCompanions.shared.setPaired(paired)
+            if paired, path.last == .pair { path.removeLast() }
+        }
+        .onChange(of: connection.agentLink.map(ObjectIdentifier.init)) { _, link in
+            if link != nil {
+                if let pendingRoute { self.pendingRoute = nil; route(pendingRoute, startVoice: true) }
+            } else { IterateScreenShare.shared.stop() }
+        }
+        .task(id: scenePhase == .active && (path.last == .assistant || path.last == .capture)) {
+            if scenePhase == .active, path.last == .assistant || path.last == .capture { await refreshFocus() }
+        }
+        .task(id: scenePhase == .active) {
+            if scenePhase == .active { await TaskInboxUpgrade.removeLocalInbox() }
+        }
+        .task(id: connection.agentLink != nil && scenePhase == .active) {
+            if connection.agentLink != nil, scenePhase == .active { await TaskInboxUpgrade.retirePushRegistration() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .iterateRouteChanged)) { _ in
+            if let destination = NativeRouteBus.shared.take() { route(destination, startVoice: true) }
+        }
+        .environment(\.openURL, OpenURLAction { url in
+            guard let target = IterateAgent.linkedPath(url) else { return .systemAction }
+            if path.last != .agent(target) { path.append(.agent(target)) }
+            return .handled
+        })
+        .onOpenURL(perform: openLink)
+        .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) {
+            if let url = $0.webpageURL { openLink(url) }
+        }
+        .sheet(item: $browser) { IterateBrowser(url: $0.id).ignoresSafeArea() }
+        .alert("Iterate", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
+            Button("OK") { message = nil }
+        } message: { Text(message ?? "") }
+        .modifier(LockedPhotoContinuation { id in showCapture(.lockedPhoto, id: id) })
+        .handlesExternalEvents(preferring: [StartNewIterateAgent.sceneIdentifier], allowing: ["*"])
+        .onChange(of: requestedAgents, initial: true) { _, requests in
+            for draft in requests where !path.contains(.newAgent(draft)) { openNewAgent(draft) }
+            consume(requests)
+        }
+    }
+
+    @ViewBuilder private func screen(_ destination: Screen) -> some View {
+        switch destination {
+        case .newAgent(let draft):
+            AgentConversationView(draft: draft, connection: connection, pair: {
+                path.append(.pair)
+                connection.connect()
+            }).id(draft)
+        case .agent(let target):
+            if case .paired(let session) = connection.pairing,
+               let agent = connection.directory.rows?.first(where: { $0.path == target }) {
+                AgentConversationView(agent: agent, connection: connection).id([session, target])
+            } else if connection.pairing == .unpaired { connectionScreen }
+            else {
+                Group {
+                    if case .failed(let reason) = connection.phase {
+                        ContentUnavailableView {
+                            Label("Couldn't load agent", systemImage: "wifi.exclamationmark")
+                        } description: { Text(reason) } actions: { Button("Retry", action: connection.connect) }
+                    } else if let issue = connection.directory.refreshError, let link = connection.agentLink {
+                        ContentUnavailableView {
+                            Label("Couldn't load agent", systemImage: "wifi.exclamationmark")
+                        } description: { Text(issue) } actions: {
+                            Button("Retry") { Task { await connection.directory.refresh(on: link) } }
+                        }
+                    } else if connection.directory.rows == nil { ProgressView("Loading agent…") }
+                    else { ContentUnavailableView("Agent unavailable", systemImage: "bubble.left.and.bubble.right") }
+                }
+                .task(id: connection.agentLink.map(ObjectIdentifier.init)) {
+                    if let link = connection.agentLink { await connection.directory.refresh(on: link) }
+                }
+            }
+        case .pair: connectionScreen
+        case .assistant:
+            if connection.hasSavedSession {
+                AssistantHome(connection: connection, showBriefing: $showBriefing)
+            } else { connectionScreen }
+        case .capture:
+            IterateCaptureView(initialMode: captureMode, lockedPhotoID: lockedPhotoID)
+                .navigationTitle("Capture")
+                .id(captureVisit)
+        case .settings: IntegrationSettings(connection: connection)
+        }
+    }
+
+    private var connectionScreen: some View {
+        ConnectionScreen(phase: connection.phase, hasSavedSession: connection.hasSavedSession, connect: connection.connect,
+                         cancel: connection.cancelApproval, disconnect: connection.disconnect, voice: connection.voice)
+    }
+
+    private func pair() {
+        path = [.pair]
+        connection.connect()
+    }
+
+    private func openLink(_ url: URL) {
+        if let target = IterateAgent.linkedPath(url) { path = [.agent(target)] }
+        else if let destination = NativeDestination(url: url) { route(destination, startVoice: false) }
+    }
+
+    private func newAgent() {
+        openNewAgent(AgentConversation())
+    }
+
+    private func openNewAgent(_ draft: AgentConversation) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            browser = nil
+            message = nil
+            showBriefing = false
+            pendingRoute = nil
+            path.append(.newAgent(draft))
+        }
+    }
+
+    private func showWeb(_ url: URL) { browser = BrowserPage(id: url) }
+
+    private func showCapture(_ mode: IterateCaptureMode, id: UUID? = nil) {
+        captureMode = mode
+        lockedPhotoID = id
+        captureVisit = UUID()
+        path = [.capture]
+    }
+
+    private func route(_ destination: NativeDestination, startVoice: Bool) {
+        switch destination {
+        case .newAgent: newAgent()
+        case .capture: showCapture(.library)
+        case .camera: showCapture(.camera)
+        case .talk:
+            path = [.assistant]
+            if startVoice {
+                if connection.agentLink != nil { BriefingPlayer.shared.stop(); connection.voice.start() }
+                else { pendingRoute = .talk }
+            }
+        case .web(let url): showWeb(url)
+        case .briefing:
+            path = [.assistant]
+            if connection.hasSavedSession { showBriefing = true }
+            else { pendingRoute = .briefing }
+        }
+    }
+
+    private func refreshFocus() async {
+        do {
+            let filter = try await IterateFocusFilter.current
+            _ = try await filter.perform()
+        } catch SetFocusFilterIntentError.notFound {
+            UserDefaults(suiteName: IterateAppGroup.identifier)?.removeObject(forKey: FocusContext.key)
+        } catch { if !Task.isCancelled { message = error.localizedDescription } }
+    }
+
+    private func clearPrivateState() {
+        if case .newAgent(let draft) = path.last {
+            path = [.newAgent(draft.isLocalDraft ? draft : AgentConversation())]
+        } else {
+            path = []
+        }
+        pendingRoute = nil
+        browser = nil
+        BriefingPlayer.shared.stop()
+        IterateScreenShare.shared.stop()
+        showBriefing = false
+        lockedPhotoID = nil
+        captureVisit = UUID()
+        do { try IterateCaptureInbox.clear() } catch { message = error.localizedDescription }
+    }
+}
+
+private struct LockedPhotoContinuation: ViewModifier {
+    let open: (UUID?) -> Void
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content.onContinueUserActivity(NSUserActivityTypeLockedCameraCapture) { activity in
+                open((activity.userInfo?["iterateCaptureID"] as? String).flatMap(UUID.init(uuidString:)))
+            }
+        } else { content }
+    }
+}

@@ -1,0 +1,15 @@
+include: [project.yml]
+name: Iterate Siri Preview
+targets:
+  Iterate:
+    deploymentTarget: "27.3"
+    settings:
+      base:
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) ITERATE_SIRI_PREVIEW"
+  IterateWidgets:
+    deploymentTarget: "27.3"
+    settings:
+      base:
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) ITERATE_SIRI_PREVIEW"
+  IterateTests:
+    deploymentTarget: "27.3"

@@ -1,0 +1,12 @@
+:root { color-scheme: light dark; font: -apple-system-body; }
+body { margin: 0; min-width: 275px; max-width: 385px; }
+main { padding: 14px; }
+h1 { font-size: 1.2em; margin: 0 0 12px; }
+#title { font-weight: 600; margin: 0 0 2px; }
+#url { color: GrayText; overflow-wrap: anywhere; font-size: .8em; margin: 0; }
+blockquote { border-inline-start: 2px solid GrayText; padding-inline-start: 10px; margin: 12px 0; max-height: 5em; overflow: auto; white-space: pre-wrap; }
+label { display: block; margin: 12px 0 4px; }
+textarea { box-sizing: border-box; width: 100%; resize: vertical; font: inherit; font-size: max(1em, 16px); }
+.actions { display: flex; gap: 8px; margin-top: 8px; }
+button { min-height: 40px; font: inherit; }
+#result { white-space: pre-wrap; margin-bottom: 0; }

@@ -1,0 +1,8 @@
+{
+  "name": "iterate-apns-setup",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "dependencies": { "iterate": "0.4.1-main.20261120T211255Z-519ee96" }
+}

@@ -1,0 +1,10 @@
+// Workspace settings for a fresh simulator build. The setup script writes Local.xcconfig.
+ITERATE_APEX_HOST = example.org
+ITERATE_CONTROL_HOST = iterate.$(ITERATE_APEX_HOST)
+ITERATE_DASH_HOST = dash.$(ITERATE_APEX_HOST)
+ITERATE_MIND_ID = 0000000000000000000000000000000000000000000000000000000000000000
+ITERATE_BUNDLE_ID = org.example.iterate
+ITERATE_TEAM_ID =
+
+#include? "Local.xcconfig"
+DEVELOPMENT_TEAM = $(ITERATE_TEAM_ID)

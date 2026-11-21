@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>IterateApexHost</key>
+	<string>$(ITERATE_APEX_HOST)</string>
+	<key>IterateControlHost</key>
+	<string>$(ITERATE_CONTROL_HOST)</string>
+	<key>IterateDashHost</key>
+	<string>$(ITERATE_DASH_HOST)</string>
+	<key>IterateMindID</key>
+	<string>$(ITERATE_MIND_ID)</string>
+	<key>IterateBundleID</key>
+	<string>$(ITERATE_BUNDLE_ID)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Iterate</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>WKApplication</key>
+	<true/>
+	<key>WKCompanionAppBundleIdentifier</key>
+	<string>$(ITERATE_BUNDLE_ID)</string>
+	<key>WKRunsIndependentlyOfCompanionApp</key>
+	<false/>
+</dict>
+</plist>

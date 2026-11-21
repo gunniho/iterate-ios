@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>IterateApexHost</key>
+	<string>$(ITERATE_APEX_HOST)</string>
+	<key>IterateControlHost</key>
+	<string>$(ITERATE_CONTROL_HOST)</string>
+	<key>IterateDashHost</key>
+	<string>$(ITERATE_DASH_HOST)</string>
+	<key>IterateMindID</key>
+	<string>$(ITERATE_MIND_ID)</string>
+	<key>IterateBundleID</key>
+	<string>$(ITERATE_BUNDLE_ID)</string>
+</dict>
+</plist>

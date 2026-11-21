@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>IterateApexHost</key>
+	<string>$(ITERATE_APEX_HOST)</string>
+	<key>IterateControlHost</key>
+	<string>$(ITERATE_CONTROL_HOST)</string>
+	<key>IterateDashHost</key>
+	<string>$(ITERATE_DASH_HOST)</string>
+	<key>IterateMindID</key>
+	<string>$(ITERATE_MIND_ID)</string>
+	<key>IterateBundleID</key>
+	<string>$(ITERATE_BUNDLE_ID)</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Iterate</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>$(ITERATE_BUNDLE_ID)</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>iterate-$(ITERATE_BUNDLE_ID:lower)</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>Schedule the alarms and timers you request.</string>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Select music from your library to play.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Review selected calendar events for your briefing.</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>Add calendar events you create with Iterate.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Photograph an item you choose to save or ask about.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Select a contact to include in your request.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Show the step total you choose to include in your own briefing.</string>
+	<key>NSHomeKitUsageDescription</key>
+	<string>Choose one of your Home scenes to run.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Include your current location in a request or set a reminder for this place.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Use your microphone to dictate a message or talk live with your agent.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Turn your dictated words into a message you can edit before sending.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Review your reminders or add one when you ask.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Share the screen you select with Iterate during a session you start.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>NSUserActivityTypeLockedCameraCapture</string>
+	</array>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>CPTemplateApplicationSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneClassName</key>
+					<string>CPTemplateApplicationScene</string>
+					<key>UISceneConfigurationName</key>
+					<string>CarPlay</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).IterateCarScene</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>waveform</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Talk to Iterate</string>
+			<key>UIApplicationShortcutItemType</key>
+			<string>talk</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>bookmark</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Capture</string>
+			<key>UIApplicationShortcutItemType</key>
+			<string>capture</string>
+		</dict>
+	</array>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>screen-capture</string>
+	</array>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+</dict>
+</plist>
