@@ -15,7 +15,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 REPO = Path(__file__).resolve().parents[1]
 MODULES = ("backend.ts", "integration.js", "integration.d.ts", "mobile.js",
-           "push.js", "memory.js", "agent-voice.js")
+           "push.js", "memory.js", "agent-voice.js", "agent-archive.js")
 VOICE_VERSION = "0.1.0-main.20261119T232115Z-355995d"
 VOICE_SHIM = 'export { default, VoiceAgentDurableObject } from "@iterate-com/voice";\n'
 LABEL = re.compile(r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?")

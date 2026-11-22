@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import WidgetKit
 
 @MainActor @Observable
 final class AgentConversation: Hashable {
@@ -34,8 +35,10 @@ final class AgentConversation: Hashable {
     private(set) var sendError: String?
     private(set) var lastSent: Int?
     @ObservationIgnored private var through: Int?
-    @ObservationIgnored private var socket: MindSocket?
+    @ObservationIgnored private var visit: UUID?
+    @ObservationIgnored private var screens: Set<UUID> = []
     @ObservationIgnored private var channel: AgentChatChannel?
+    @ObservationIgnored private var preloading: Task<Void, Never>?
     private var pending: Outgoing?
     var outgoingText: String? { sending || sendError != nil ? pending?.text : nil }
     @ObservationIgnored private var firstMember: String?
@@ -82,11 +85,26 @@ final class AgentConversation: Hashable {
         return target
     }
 
+    /// A kept conversation can be on more than one screen. It stays live until the last one leaves.
+    func open(on link: MindSocket?, for screen: UUID) async {
+        screens.insert(screen)
+        await open(on: link)
+    }
+
+    func leave(_ screen: UUID) {
+        screens.remove(screen)
+        if screens.isEmpty { close() }
+    }
+
     func open(on link: MindSocket?) async {
         close()
         readError = nil
         guard !isNewDraft, let link else { return }
-        socket = link
+        let visit = UUID()
+        self.visit = visit
+        // A read that is already on its way serves this visit.
+        await preloading?.value
+        guard self.visit == visit, !Task.isCancelled else { return }
         do {
             guard let path else { throw ConnectionIssue.invalidResponse }
             let live = try AgentChatChannel(socket: link, path: path)
@@ -94,27 +112,51 @@ final class AgentConversation: Hashable {
             if let offset = firstReceiptToFollow {
                 // Replay any reply that arrived before the first send was acknowledged.
                 try await follow(live, after: offset)
-                try requireCurrent(link)
+                try requireCurrent(visit)
                 firstReceiptToFollow = nil
+            } else if let held = through {
+                // The words are already on screen. One round trip replays what was missed and goes live.
+                async let head = live.head()
+                try await follow(live, after: held)
+                let latest = try await head
+                try requireCurrent(visit)
+                if held > latest {
+                    // The agent's log was replaced. Read it again from its end.
+                    through = nil; floor = nil; messages = []
+                    await open(on: link)
+                    return
+                }
             } else {
-                let head = try await live.head()
-                try requireCurrent(link)
-                if let through, through > head { self.through = nil; floor = nil; messages = [] }
-                let start = through ?? max(0, head - AgentChatChannel.window)
-                let latest = try await live.messages(after: start, through: head)
-                try requireCurrent(link)
-                merge(latest)
-                if floor == nil { floor = start }
-                through = head
-                try await follow(live, after: head)
+                let tail = try await live.latest()
+                try requireCurrent(visit)
+                show(tail)
+                try await follow(live, after: tail.head)
             }
-            try requireCurrent(link)
+            try requireCurrent(visit)
             connected = true
         } catch {
-            guard socket === link, !Task.isCancelled else { return }
+            guard self.visit == visit, !Task.isCancelled else { return }
             close()
             readError = error.localizedDescription
         }
+    }
+
+    /// Read the newest messages ahead of a visit, so the conversation opens on them.
+    func preload(on link: MindSocket) {
+        guard !isNewDraft, through == nil, visit == nil, preloading == nil, let path else { return }
+        preloading = Task {
+            defer { preloading = nil }
+            guard let reader = try? AgentChatChannel(socket: link, path: path) else { return }
+            defer { reader.close() }
+            guard let tail = try? await reader.latest(), through == nil else { return }
+            show(tail)
+        }
+    }
+
+    private func show(_ tail: (head: Int, floor: Int, messages: [AgentChatMessage])) {
+        merge(tail.messages)
+        floor = tail.floor
+        through = tail.head
     }
 
     private func follow(_ live: AgentChatChannel, after offset: Int) async throws {
@@ -130,22 +172,20 @@ final class AgentConversation: Hashable {
     func close() {
         channel?.close()
         channel = nil
-        socket = nil
+        visit = nil
         connected = false
         loadingEarlier = false
     }
 
     func loadEarlier() async {
-        guard let live = channel, let link = socket, let end = floor, end > 0, !loadingEarlier else { return }
+        guard let live = channel, let end = floor, end > 0, !loadingEarlier else { return }
         loadingEarlier = true
         defer { if channel === live { loadingEarlier = false } }
         do {
-            let start = max(0, end - AgentChatChannel.window)
-            let older = try await live.messages(after: start, through: end)
-            try requireCurrent(link)
-            guard channel === live else { return }
-            merge(older)
-            floor = start
+            let older = try await live.earlier(than: end)
+            guard channel === live, !Task.isCancelled else { return }
+            merge(older.messages)
+            floor = older.floor
             readError = nil
         } catch {
             if channel === live, !Task.isCancelled { readError = error.localizedDescription }
@@ -195,6 +235,7 @@ final class AgentConversation: Hashable {
                 guard let live = channel else { throw ConnectionIssue.lostConnection }
                 merge([try await live.send(text, key: outgoing.key)])
             }
+            WidgetCenter.shared.reloadTimelines(ofKind: IterateAppGroup.recentAgentsWidgetKind)
         } catch {
             if pending?.key == outgoing.key {
                 if isNewDraft { firstDeliveryWasUncertain = true }
@@ -217,8 +258,40 @@ final class AgentConversation: Hashable {
         }
     }
 
-    private func requireCurrent(_ link: MindSocket) throws {
+    private func requireCurrent(_ visit: UUID) throws {
         try Task.checkCancellation()
-        guard socket === link else { throw CancellationError() }
+        guard self.visit == visit else { throw CancellationError() }
+    }
+}
+
+/// The conversations read in this pairing. Returning to one shows its words at once, and the
+/// agents at the top of the list are read before they are opened.
+@MainActor
+final class AgentConversations {
+    static let capacity = 12
+    private var held: [String: AgentConversation] = [:]
+    private var recent: [String] = []
+
+    func conversation(for path: String) -> AgentConversation {
+        recent.removeAll { $0 == path }
+        recent.append(path)
+        if let conversation = held[path] { return conversation }
+        let conversation = AgentConversation(path: path)
+        held[path] = conversation
+        // A screen that still shows a dropped conversation keeps it alive on its own.
+        while recent.count > Self.capacity { held[recent.removeFirst()] = nil }
+        return conversation
+    }
+
+    func preload(_ paths: [String], on link: MindSocket) {
+        for path in paths where held[path] == nil || held[path]?.floor == nil {
+            conversation(for: path).preload(on: link)
+        }
+    }
+
+    func forget() {
+        for conversation in held.values { conversation.close() }
+        held = [:]
+        recent = []
     }
 }

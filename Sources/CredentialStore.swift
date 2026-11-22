@@ -35,6 +35,9 @@ struct CredentialStore {
     }
 
     func clear() throws {
+        #if !ITERATE_VOICE_ONLY
+        if account == Deployment.current.credentialAccount { WidgetSnapshotService.selectPairing(nil) }
+        #endif
         let status = SecItemDelete(query as CFDictionary)
         if status != errSecItemNotFound { try check(status) }
     }

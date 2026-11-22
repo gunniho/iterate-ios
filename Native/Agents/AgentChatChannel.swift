@@ -4,6 +4,8 @@ import Foundation
 @MainActor
 final class AgentChatChannel {
     static let window = 160
+    /// A mind that predates the transcript route answers 404 once. The log is then read directly.
+    static var transcriptRouteMissing = false
 
     private let socket: MindSocket
     private let path: String
@@ -23,11 +25,57 @@ final class AgentChatChannel {
         try await page(after: 9_007_199_254_740_991, limit: 1).scannedThrough
     }
 
+    /// The newest messages, the offset they reach back to and the head a subscription resumes from.
+    func latest() async throws -> (head: Int, floor: Int, messages: [AgentChatMessage]) {
+        if let page = try await transcript(through: nil) { return page }
+        let head = try await head()
+        let start = max(0, head - Self.window)
+        return (head, start, try await messages(after: start, through: head))
+    }
+
+    /// The messages before the ones held, and the offset they reach back to.
+    func earlier(than floor: Int) async throws -> (floor: Int, messages: [AgentChatMessage]) {
+        if let page = try await transcript(through: floor) { return (page.floor, page.messages) }
+        let start = max(0, floor - Self.window)
+        return (start, try await messages(after: start, through: floor))
+    }
+
+    /// The member facet reads the log beside it and returns only what a conversation shows.
+    private func transcript(through: Int?) async throws -> (head: Int, floor: Int, messages: [AgentChatMessage])? {
+        guard !Self.transcriptRouteMissing else { return nil }
+        guard !closed else { throw CancellationError() }
+        var body: [String: Any] = ["path": path]
+        if let through { body["through"] = through }
+        let wire = try await socket.call(path: ["mind", "iterateMobile", "request"],
+                                         arguments: [["method": "POST", "path": "/agents/transcript", "body": body]],
+                                         timeout: .seconds(18))
+        guard let envelope = wire as? [String: Any], let status = envelope["status"] as? Int else {
+            throw ConnectionIssue.invalidResponse
+        }
+        if status == 404 {
+            Self.transcriptRouteMissing = true
+            return nil
+        }
+        guard status == 200 else {
+            let reason = (envelope["body"] as? [String: Any])?["error"] as? String
+            if status == 401 || status == 403 { throw AssistantIssue.accessDenied(reason ?? "Iterate declined this request.") }
+            throw AssistantIssue.remote(reason ?? "Iterate returned HTTP \(status).")
+        }
+        // The events keep their wire form, so they read exactly like a page of the log.
+        guard let page = envelope["body"] as? [String: Any], let wrapper = page["events"] as? [Any], wrapper.count == 1,
+              let events = wrapper[0] as? [[String: Any]], let head = page["head"] as? Int, head >= 0,
+              let floor = page["floor"] as? Int, floor >= 0, floor <= through ?? head else {
+            throw ConnectionIssue.invalidResponse
+        }
+        return (head, floor, events.compactMap(AgentChatMessage.init(event:)))
+    }
+
     func messages(after start: Int, through end: Int) async throws -> [AgentChatMessage] {
         var after = start
         var messages: [AgentChatMessage] = []
         while after < end {
-            let part = try await page(after: after, limit: min(48, end - after))
+            // The mind also cuts a page by size, so one request usually returns the whole window.
+            let part = try await page(after: after, limit: min(Self.window, end - after))
             for event in part.events {
                 if let offset = event["offset"] as? Int, offset > start, offset <= end,
                    let message = AgentChatMessage(event: event) { messages.append(message) }

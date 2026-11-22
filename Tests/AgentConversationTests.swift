@@ -50,6 +50,22 @@ final class AgentConversationTests: XCTestCase {
     }
 
     @MainActor
+    func testReturningToAnAgentFindsItsConversationUntilThePairingChanges() {
+        let conversations = AgentConversations()
+        let first = conversations.conversation(for: "/agents/one")
+        first.draft = "Unsent thought"
+        XCTAssertTrue(conversations.conversation(for: "/agents/one") === first)
+        XCTAssertFalse(conversations.conversation(for: "/agents/two") === first)
+        XCTAssertEqual(conversations.conversation(for: "/agents/one").draft, "Unsent thought")
+        // Only the most recently visited are kept.
+        for index in 0..<AgentConversations.capacity { _ = conversations.conversation(for: "/agents/later-\(index)") }
+        XCTAssertFalse(conversations.conversation(for: "/agents/one") === first)
+        let kept = conversations.conversation(for: "/agents/kept")
+        conversations.forget()
+        XCTAssertFalse(conversations.conversation(for: "/agents/kept") === kept)
+    }
+
+    @MainActor
     func testFirstSendMatchesTheDeployedCapnWebPipeline() throws {
         let expression = AgentChatChannel.firstMessageExpression(after: 17, at: "/agents/example", text: "Hello", key: "request")
         // Wire representation emitted by Iterate's Cap'n Web client for

@@ -1,5 +1,6 @@
 import ActivityKit
 import AlarmKit
+import OSLog
 import SwiftUI
 import WidgetKit
 
@@ -43,6 +44,139 @@ struct IterateTodayWidget: Widget {
             .configurationDisplayName("Iterate")
             .description("Talk to Iterate or capture something for your assistant.")
             .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .accessoryCircular, .accessoryRectangular, .accessoryInline])
+    }
+}
+
+// Leave time for WidgetKit to render even when the member socket stalls.
+func fetchWidgetSnapshot<Value: Sendable>(_ fetch: @escaping @Sendable () async throws -> Value) async throws -> Value {
+    try await withThrowingTaskGroup(of: Value.self) { tasks in
+        tasks.addTask(operation: fetch)
+        tasks.addTask {
+            try await Task.sleep(for: .seconds(8))
+            throw URLError(.timedOut)
+        }
+        defer { tasks.cancelAll() }
+        guard let first = try await tasks.next() else { throw CancellationError() }
+        return first
+    }
+}
+
+struct YourMoveEntry: TimelineEntry, Sendable {
+    let date: Date
+    let state: YourMoveTimeline.State
+}
+
+private struct YourMoveProvider: TimelineProvider {
+    private static let log = Logger(subsystem: Deployment.current.bundleID + ".widgets", category: "YourMove")
+
+    func placeholder(in context: Context) -> YourMoveEntry {
+        .init(date: .now, state: .ready(approvals: 1, questions: 2))
+    }
+
+    func getSnapshot(in context: Context, completion: @escaping @Sendable (YourMoveEntry) -> Void) {
+        if context.isPreview { completion(placeholder(in: context)); return }
+        let now = Date.now
+        let plan = YourMoveTimeline.recover(YourMoveSnapshotStore.load(), now: now)
+        completion(.init(date: now, state: plan.state))
+    }
+
+    func getTimeline(in context: Context, completion: @escaping @Sendable (Timeline<YourMoveEntry>) -> Void) {
+        Task {
+            let plan = await refresh()
+            var entries = [YourMoveEntry(date: .now, state: plan.state)]
+            if let expiresAt = plan.expiresAt {
+                entries.append(.init(date: expiresAt, state: .stale))
+            }
+            completion(Timeline(entries: entries, policy: .after(plan.retryAt)))
+        }
+    }
+
+    private func refresh() async -> YourMoveTimeline {
+        do {
+            let snapshot = try await fetchWidgetSnapshot { try await YourMoveCounts.fetch() }
+            return .live(snapshot, now: .now)
+        } catch {
+            let failure = error as NSError
+            Self.log.notice("Summary refresh deferred: \(failure.domain, privacy: .public) \(failure.code, privacy: .public)")
+            return .afterFailure(error, cached: YourMoveSnapshotStore.load(), now: .now)
+        }
+    }
+}
+
+struct YourMoveWidgetView: View {
+    let entry: YourMoveEntry
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Group {
+            if case .ready(0, 0) = entry.state {
+                message("arrow.up.forward.app", "Open Iterate")
+            } else {
+                reviewCard.widgetURL(NativeDestination.yourMove.url)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .accessibilityElement(children: .combine)
+        .containerBackground(for: .widget) { Color(uiColor: .systemBackground) }
+    }
+
+    private var reviewCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Your move").font(.subheadline.weight(.semibold))
+                Spacer(minLength: 4)
+                Image(systemName: "arrow.up.forward")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
+            Spacer(minLength: 6)
+            switch entry.state {
+            case .ready(let approvals, let questions):
+                Text((approvals + questions).formatted())
+                    .font(.system(size: 51, weight: .medium, design: .rounded).monospacedDigit())
+                    .lineLimit(1).minimumScaleFactor(0.4)
+                    .foregroundStyle(colorScheme == .dark ? Color(red: 1, green: 0.73, blue: 0.46) :
+                                        Color(red: 0.63, green: 0.31, blue: 0.10))
+                    .widgetAccentable()
+                    .accessibilityHidden(true)
+                if approvals > 0 && questions > 0 {
+                    Text(approvals == 1 ? "1 email to approve" : "\(approvals.formatted()) emails to approve")
+                    Text(questions == 1 ? "1 question" : "\(questions.formatted()) questions")
+                } else if approvals > 0 {
+                    Text(approvals == 1 ? "Email to approve" : "Emails to approve")
+                        .accessibilityLabel(approvals == 1 ? "1 email to approve" : "\(approvals.formatted()) emails to approve")
+                } else {
+                    Text(questions == 1 ? "Question to answer" : "Questions to answer")
+                        .accessibilityLabel(questions == 1 ? "1 question to answer" : "\(questions) questions to answer")
+                }
+            case .unpaired: message("link", "Connect to Iterate")
+            case .stale: message("arrow.clockwise", "Open to check")
+            }
+        }
+        .font(.footnote.weight(.medium))
+        .privacySensitive()
+    }
+
+    private func message(_ symbol: String, _ title: LocalizedStringKey) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Image(systemName: symbol)
+                .font(.system(size: 32, weight: .light))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text(title).font(.headline).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+struct YourMoveWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: IterateAppGroup.yourMoveWidgetKind, provider: YourMoveProvider()) { entry in
+            YourMoveWidgetView(entry: entry)
+        }
+        .configurationDisplayName("Your move")
+        .description("See approvals and questions waiting for you in Iterate.")
+        .supportedFamilies([.systemSmall])
     }
 }
 
@@ -113,6 +247,7 @@ enum IterateWidgetExtension {
 private struct OriginalWidgetBundle: WidgetBundle {
     var body: some Widget {
         IterateTodayWidget()
+        YourMoveWidget()
     }
 }
 
@@ -120,6 +255,8 @@ private struct OriginalWidgetBundle: WidgetBundle {
 private struct IterateWidgetBundle: WidgetBundle {
     var body: some Widget {
         IterateTodayWidget()
+        YourMoveWidget()
+        if #available(iOS 27, *) { RecentAgentsWidget() }
         IterateNewAgentControl()
         IterateTalkControl()
         IterateCaptureControl()

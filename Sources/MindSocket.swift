@@ -32,11 +32,13 @@ final class MindSocket {
         peerResults.removeAll()
     }
 
-    func run(verified: @escaping @MainActor (String?) -> Void) async throws {
+    /// `opened` runs once requests can be queued behind the sign-in, before the mind has answered.
+    func run(opened: (@MainActor () -> Void)? = nil, verified: @escaping @MainActor (String?) -> Void) async throws {
         let transport = socket
         socket.resume()
         defer { close() }
         _ = try reference(target: 0, path: ["authenticate"])
+        opened?()
         try await withTaskCancellationHandler {
             try await withThrowingTaskGroup(of: Void.self) { group in
                 group.addTask { try await self.write() }

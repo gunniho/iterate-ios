@@ -1,4 +1,5 @@
 import SwiftUI
+import WidgetKit
 
 /// Reads only the reply to a question opened by the person using this view.
 struct IterateAnswerView: View {
@@ -21,6 +22,11 @@ struct IterateAnswerView: View {
             }
             if run.status == .needsInput {
                 Link("Continue in browser", destination: run.url)
+            }
+        }
+        .onChange(of: run.status) { previous, current in
+            if previous == .needsInput || current == .needsInput {
+                WidgetCenter.shared.reloadTimelines(ofKind: IterateAppGroup.yourMoveWidgetKind)
             }
         }
         .task(id: scenePhase == .background ? nil : attempt) {

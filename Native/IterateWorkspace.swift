@@ -1,6 +1,7 @@
 import AppIntents
 import LockedCameraCapture
 import SwiftUI
+import WidgetKit
 
 @MainActor
 struct IterateWindow: View {
@@ -14,7 +15,7 @@ struct IterateWindow: View {
 
 @MainActor
 struct IterateWorkspace: View {
-    private enum Screen: Hashable { case pair, assistant, capture, settings, agent(String), newAgent(AgentConversation) }
+    private enum Screen: Hashable { case pair, assistant, capture, settings, yourMove, approvals, agent(String), newAgent(AgentConversation) }
     private struct BrowserPage: Identifiable { let id: URL }
 
     let connection: MindConnection
@@ -29,6 +30,7 @@ struct IterateWorkspace: View {
     @State private var browser: BrowserPage?
     @State private var message: String?
     @State private var pendingRoute: NativeDestination?
+    @State private var lastYourMoveReload: (session: String, date: Date)?
 
     init(connection: MindConnection, requestedAgents: [AgentConversation], consume: @escaping ([AgentConversation]) -> Void) {
         self.connection = connection
@@ -42,7 +44,13 @@ struct IterateWorkspace: View {
             AgentsHome(connection: connection, isVisible: path.isEmpty, connect: pair) { path.append(.agent($0.path)) }
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
+                        Button { path = [.approvals] } label: {
+                            Label("Approvals", systemImage: "signature")
+                        }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
                         Menu {
+                            Button { path = [.yourMove] } label: { Label("Your move", systemImage: "tray") }
                             Button { path = [.assistant] } label: { Label("Assistant", systemImage: "waveform") }
                             Button { path = [.settings] } label: { Label("Settings", systemImage: "gearshape") }
                         } label: { Image(systemName: "ellipsis.circle") }
@@ -60,9 +68,13 @@ struct IterateWorkspace: View {
             if phase == .active { connection.activate() }
             else if phase == .background { connection.background() }
         }
-        .onChange(of: connection.pairing, initial: true) { _, pairing in
+        .onChange(of: connection.pairing, initial: true) { previous, pairing in
             guard pairing != .checking else { return }
             let paired = connection.hasSavedSession
+            if previous != pairing {
+                WidgetCenter.shared.reloadTimelines(ofKind: IterateAppGroup.yourMoveWidgetKind)
+                WidgetCenter.shared.reloadTimelines(ofKind: IterateAppGroup.recentAgentsWidgetKind)
+            }
             if !paired, IterateCompanions.shared.paired { clearPrivateState() }
             IterateCompanions.shared.setPaired(paired)
             if paired, path.last == .pair { path.removeLast() }
@@ -80,6 +92,9 @@ struct IterateWorkspace: View {
         }
         .task(id: connection.agentLink != nil && scenePhase == .active) {
             if connection.agentLink != nil, scenePhase == .active { await TaskInboxUpgrade.retirePushRegistration() }
+        }
+        .task(id: foregroundWidgetSession) {
+            if let session = foregroundWidgetSession { await refreshYourMove(for: session) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .iterateRouteChanged)) { _ in
             if let destination = NativeRouteBus.shared.take() { route(destination, startVoice: true) }
@@ -137,6 +152,13 @@ struct IterateWorkspace: View {
                 }
             }
         case .pair: connectionScreen
+        case .approvals, .yourMove:
+            if case .paired(let sessionID) = connection.pairing {
+                if destination == .approvals { ApprovalsView(sessionID: sessionID).id(sessionID) }
+                else { YourMoveView(sessionID: sessionID).id(sessionID) }
+            } else if connection.pairing == .checking {
+                ProgressView("Checking your connection…")
+            } else { connectionScreen }
         case .assistant:
             if connection.hasSavedSession {
                 AssistantHome(connection: connection, showBriefing: $showBriefing)
@@ -160,8 +182,16 @@ struct IterateWorkspace: View {
     }
 
     private func openLink(_ url: URL) {
-        if let target = IterateAgent.linkedPath(url) { path = [.agent(target)] }
+        if let target = IterateAgent.linkedPath(url) { openAgents(target) }
         else if let destination = NativeDestination(url: url) { route(destination, startVoice: false) }
+    }
+
+    private func openAgents(_ target: String? = nil) {
+        browser = nil
+        message = nil
+        showBriefing = false
+        pendingRoute = nil
+        path = target.map { [.agent($0)] } ?? []
     }
 
     private func newAgent() {
@@ -191,7 +221,12 @@ struct IterateWorkspace: View {
 
     private func route(_ destination: NativeDestination, startVoice: Bool) {
         switch destination {
+        case .agents: openAgents()
         case .newAgent: newAgent()
+        case .yourMove:
+            browser = nil
+            pendingRoute = nil
+            path = [.yourMove]
         case .capture: showCapture(.library)
         case .camera: showCapture(.camera)
         case .talk:
@@ -215,6 +250,32 @@ struct IterateWorkspace: View {
         } catch SetFocusFilterIntentError.notFound {
             UserDefaults(suiteName: IterateAppGroup.identifier)?.removeObject(forKey: FocusContext.key)
         } catch { if !Task.isCancelled { message = error.localizedDescription } }
+    }
+
+    private var foregroundWidgetSession: String? {
+        guard scenePhase == .active, connection.agentLink != nil,
+              case .paired(let session) = connection.pairing else { return nil }
+        return session
+    }
+
+    private func refreshYourMove(for session: String) async {
+        let now = Date.now
+        let recent = now.addingTimeInterval(-120)...now
+        if let reload = lastYourMoveReload, reload.session == session, recent.contains(reload.date) { return }
+        let installed = await withCheckedContinuation { continuation in
+            WidgetCenter.shared.getCurrentConfigurations { result in
+                let widgets = (try? result.get()) ?? []
+                continuation.resume(returning: widgets.contains { $0.kind == IterateAppGroup.yourMoveWidgetKind })
+            }
+        }
+        guard installed, !Task.isCancelled, foregroundWidgetSession == session else { return }
+        let checkedAt = YourMoveSnapshotStore.load()?.checkedAt
+        if !recent.contains(checkedAt ?? .distantPast) {
+            guard (try? await YourMoveCounts.fetch(requiredSession: session)) != nil else { return }
+        }
+        guard !Task.isCancelled, foregroundWidgetSession == session else { return }
+        lastYourMoveReload = (session, .now)
+        WidgetCenter.shared.reloadTimelines(ofKind: IterateAppGroup.yourMoveWidgetKind)
     }
 
     private func clearPrivateState() {

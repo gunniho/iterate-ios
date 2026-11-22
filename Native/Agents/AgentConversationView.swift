@@ -11,6 +11,7 @@ struct AgentConversationView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colors
     @State private var retry = 0
+    @State private var screen = UUID()
     @State private var atBottom = true
     @FocusState private var composerFocused: Bool
     @State private var dictation: AgentDictation?
@@ -22,7 +23,7 @@ struct AgentConversationView: View {
         initialTitle = agent.name
         pair = nil
         self.connection = connection
-        _conversation = State(initialValue: AgentConversation(path: agent.path))
+        _conversation = State(initialValue: connection.conversations.conversation(for: agent.path))
     }
 
     init(draft: AgentConversation, connection: MindConnection, pair: @escaping () -> Void) {
@@ -68,14 +69,14 @@ struct AgentConversationView: View {
             if conversation.isNewDraft { composerFocused = true }
         }
         .task(id: observation) {
-            if !conversation.isNewDraft { await conversation.open(on: activeLink) }
+            if !conversation.isNewDraft { await conversation.open(on: activeLink, for: screen) }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { dictation?.cancel() }
         }
         .onDisappear {
             dictation?.cancel()
-            conversation.close()
+            conversation.leave(screen)
         }
     }
 
@@ -130,7 +131,8 @@ struct AgentConversationView: View {
         return ObservationKey(link: activeLink.map(ObjectIdentifier.init), retry: retry)
     }
 
-    private var activeLink: MindSocket? { scenePhase == .active ? connection.agentLink : nil }
+    // The connection decides when the link ends. A glance away keeps the conversation live.
+    private var activeLink: MindSocket? { connection.agentLink }
 
     private var transcript: some View {
         ScrollViewReader { scroll in
@@ -168,8 +170,9 @@ struct AgentConversationView: View {
                         .allowsHitTesting(false)
                 }
             }
-            .onChange(of: conversation.messages.last?.id) { previous, latest in
-                if latest != nil, previous == nil || atBottom { scroll.scrollTo("bottom", anchor: .bottom) }
+            // A kept conversation appears with its messages, so the first pass also starts at the end.
+            .onChange(of: conversation.messages.last?.id, initial: true) { previous, latest in
+                if latest != nil, previous == nil || previous == latest || atBottom { scroll.scrollTo("bottom", anchor: .bottom) }
             }
             .onChange(of: conversation.outgoingText, initial: true) { _, text in
                 if text != nil { scroll.scrollTo("bottom", anchor: .bottom) }

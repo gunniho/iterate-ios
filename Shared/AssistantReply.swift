@@ -50,13 +50,13 @@ struct IterateAttachment: Sendable {
 }
 
 enum AssistantIssue: LocalizedError {
-    case unpaired, changedSession, storage, invalidInput(String), remote(String), conflict(String), unavailable
+    case unpaired, changedSession, storage, invalidInput(String), remote(String), accessDenied(String), conflict(String), unavailable
     var errorDescription: String? {
         switch self {
         case .unpaired: "Open Iterate and connect your iPhone first."
         case .changedSession: "Your Iterate connection changed. Open the app and try again."
         case .storage: "Iterate’s shared storage is unavailable. Unlock your device and try again."
-        case .invalidInput(let message), .remote(let message), .conflict(let message): message
+        case .invalidInput(let message), .remote(let message), .accessDenied(let message), .conflict(let message): message
         case .unavailable: "Iterate could not complete this request. Try again in a moment."
         }
     }
@@ -64,6 +64,8 @@ enum AssistantIssue: LocalizedError {
 
 enum IterateAppGroup {
     static let identifier = Deployment.current.appGroup
+    static let yourMoveWidgetKind = Deployment.current.bundleID + ".your-move"
+    static let recentAgentsWidgetKind = Deployment.current.bundleID + ".recent-agents"
 
     static func container() throws -> URL {
         guard let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier) else {

@@ -73,7 +73,26 @@ protocol VoiceAudioIO: AnyObject {
 @MainActor
 final class CallAudio: VoiceAudioIO {
     nonisolated static let frameBytes = 1600
-    private static let sessionChanges = DispatchQueue(label: Deployment.current.bundleID + ".audio-session")
+    private nonisolated static let sessionChanges = DispatchQueue(label: Deployment.current.bundleID + ".audio-session")
+
+    /// Changing the audio session blocks its caller, at times for hundreds of milliseconds.
+    /// Calls and dictation make their changes here, in order and off the main actor.
+    nonisolated static func changeSession(_ change: @escaping @Sendable (AVAudioSession) throws -> Void) async throws {
+        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
+            sessionChanges.async {
+                do {
+                    try change(AVAudioSession.sharedInstance())
+                    done.resume()
+                } catch { done.resume(throwing: error) }
+            }
+        }
+    }
+
+    nonisolated static func releaseSession() {
+        sessionChanges.async {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
+    }
     private let session = AVAudioSession.sharedInstance()
     private let engine: AVAudioEngine
     private let muteInput: Bool
@@ -101,16 +120,9 @@ final class CallAudio: VoiceAudioIO {
     func start(interrupted: @escaping @MainActor (String) -> Void) async throws -> AsyncThrowingStream<Data, Error> {
         do {
             sessionActive = true
-            let session = self.session
-            try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-                Self.sessionChanges.async {
-                    do {
-                        try session.setCategory(.playAndRecord, mode: .voiceChat,
-                                                options: [.defaultToSpeaker, .allowBluetoothHFP])
-                        try session.setActive(true)
-                        done.resume()
-                    } catch { done.resume(throwing: error) }
-                }
+            try await Self.changeSession { session in
+                try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothHFP])
+                try session.setActive(true)
             }
             try Task.checkCancellation()
             guard sessionActive else { throw CancellationError() }
@@ -248,8 +260,7 @@ final class CallAudio: VoiceAudioIO {
         capture = nil
         if sessionActive {
             sessionActive = false
-            let session = self.session
-            Self.sessionChanges.async { try? session.setActive(false, options: .notifyOthersOnDeactivation) }
+            Self.releaseSession()
         }
     }
 }

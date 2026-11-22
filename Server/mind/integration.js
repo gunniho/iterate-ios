@@ -7,8 +7,10 @@ import { deployment } from "./settings.js";
 export { openAgentVoice } from "./agent-voice.js";
 export { partsOfAgent };
 
-export function createMobileService(storage) {
-  return new MobileService(storage, sendPush);
+// The approvals inbox and Your move list what a mind holds for a member's decision. A mind that
+// holds mail or agent actions passes its reader as `pendingApprovals`. Without one the inbox is empty.
+export function createMobileService(storage, { pendingApprovals = async () => [] } = {}) {
+  return new MobileService(storage, sendPush, pendingApprovals);
 }
 
 export async function installIterateMobile(itx) {

@@ -51,6 +51,16 @@ The iPhone signs in to your control-plane hostname using Iterate’s device flow
 
 The mobile facet scopes runs, notes, attachments and device registrations to the actor in the authenticated member session. Requests and replies use stable UUIDs so delivery can resume after a disconnect. **Remember** saves the member’s original note. **Ask** retrieves relevant notes and **Briefing** can include recent work. When the mind’s AI enrichment is unavailable, the memory store can still match note text locally.
 
+## Approvals and Your move
+
+**Approvals** and the **Your move** widget list what your mind is holding for a member's decision, such as an outgoing email or an agent action. The template has no source of held acts of its own, so both start empty. To fill them, pass a reader when `backend.ts` creates the service.
+
+```ts
+#service = createMobileService(this.ctx.storage, { pendingApprovals });
+```
+
+`pendingApprovals(itx)` returns one row for each held act: `{ id, kind, title, recipients, heldAt, reviewURL }`. `kind` is `"email"` or `"action"`, and `heldAt` is an ISO 8601 time. The app opens a row only if its `reviewURL` is your mind's approval page for that act, `https://<control-host>/secrets/approvals?digest=<64 lowercase hex characters>`. Decisions are made on that page with the member's passkey, and the facet's approvals route is read-only.
+
 ## Optional Apple push setup
 
 The app in this repository displays replies inline. Its backend also supports APNs for clients that register task notifications or Live Activities. The following steps apply if you ship such a client.

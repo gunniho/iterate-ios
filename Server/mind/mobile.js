@@ -1,4 +1,5 @@
 // The phone's commands are accepted only by the member-authenticated facet in backend.ts.
+import { AgentArchiveError, archivedAgentPaths, setAgentArchived } from "./agent-archive.js";
 import { appTopic } from "./push.js";
 import { deployment } from "./settings.js";
 import { MemoryStore, MemoryError, noteText } from "./memory.js";
@@ -139,6 +140,15 @@ function token(value) {
   return value.toLowerCase();
 }
 const runKey = (owner, runID) => "run:" + owner + ":" + runID;
+const questionPrefix = owner => "question:" + owner + ":";
+const needsReply = r => r.status === "needsInput" && Boolean(r.response?.trim());
+
+async function saveRun(tx, owner, r) {
+  await tx.put(runKey(owner, r.id), r);
+  const questionKey = questionPrefix(owner) + r.id;
+  if (needsReply(r)) await tx.put(questionKey, r.id);
+  else await tx.delete(questionKey);
+}
 const deviceKey = (owner, deviceID) => "device:" + owner + ":" + deviceID;
 const tokenFields = ["notificationToken", "pushToStartToken"];
 const activityPrefix = (owner, runID) =>
@@ -274,16 +284,80 @@ function indexKey(owner, date, runID, collection = "index") {
   return collection + ":" + owner + ":" + descending + ":" + runID;
 }
 
+// What the native conversation shows: a person's words and the agent's published replies.
+const CHAT = new Set(["message-received", "context-added", "web-message-sent"].map((t) => E + t));
+const TRANSCRIPT_PAGE = 30;
+const TRANSCRIPT_BYTES = 1024 * 1024;
+const TRANSCRIPT_SPAN = 512;
+const TRANSCRIPT_WORK = 1500;
+
+function offset(value, field) {
+  if (!Number.isSafeInteger(value) || value < 0) fail(400, "Invalid " + field + ".");
+  return value;
+}
+
+async function chatEvents(context, after, through, tally) {
+  const found = [];
+  let cursor = after;
+  while (cursor < through) {
+    const page = await context.readEvents(cursor, 500);
+    tally.read += page.events.length;
+    for (const event of page.events) {
+      if (event.offset <= after || event.offset > through || !CHAT.has(event.type)) continue;
+      if (event.type === E + "context-added" && event.payload?.role !== "user") continue;
+      found.push(event);
+    }
+    if (page.atHead || page.scannedThroughOffset <= cursor) break;
+    cursor = page.scannedThroughOffset;
+  }
+  return found;
+}
+
+// The newest chat events of one agent at or below `through`, oldest first. A conversation is a
+// small part of an agent's log, so the scan widens until it has a page of them or has read its
+// share of the log. Every chat event above `floor` and at or below `through` is in `events`,
+// so an empty page with a floor above zero means there is more to ask for. `head` is where a
+// subscription resumes.
+export async function agentTranscript(itx, input) {
+  const { path, through, limit } = input ?? {};
+  if (typeof path !== "string" || !path.startsWith("/agents/") || path.length <= "/agents/".length || path.length > 300)
+    fail(400, "Choose an agent.");
+  const want = limit == null ? TRANSCRIPT_PAGE : offset(limit, "limit");
+  if (want < 1 || want > 100) fail(400, "Invalid limit.");
+  const context = itx.cd(path);
+  const head = (await context.readEvents(Number.MAX_SAFE_INTEGER, 1)).scannedThroughOffset;
+  const end = through == null ? head : Math.min(offset(through, "offset"), head);
+  const tally = { read: 0 };
+  let found = [], floor = end, span = TRANSCRIPT_SPAN;
+  while (floor > 0 && found.length < want && tally.read < TRANSCRIPT_WORK) {
+    const from = Math.max(0, floor - span);
+    found = (await chatEvents(context, from, floor, tally)).concat(found);
+    floor = from;
+    span = Math.min(span * 2, 4096);
+  }
+  const events = [];
+  let bytes = 0;
+  for (let i = found.length - 1; i >= 0 && events.length < want; i--) {
+    bytes += JSON.stringify(found[i]).length;
+    if (events.length && bytes > TRANSCRIPT_BYTES) break;
+    events.push(found[i]);
+  }
+  events.reverse();
+  if (events.length < found.length) floor = events[0].offset - 1;
+  return { head, floor, events };
+}
+
 export class MobileService {
-  constructor(storage, push) {
+  constructor(storage, push, readPendingApprovals) {
     this.storage = storage;
     this.push = push;
+    this.readPendingApprovals = readPendingApprovals;
     this.memory = new MemoryStore(storage);
   }
 
   async request(itx, stamp, command) {
     try {
-      const owner = await hash(principalOf(stamp));
+      const actor = principalOf(stamp);
       if (
         !command ||
         typeof command.path !== "string" ||
@@ -300,7 +374,44 @@ export class MobileService {
       const body = command.body ?? {};
       if (typeof body !== "object" || Array.isArray(body))
         fail(400, "Invalid request.");
+      if (resource === "agents" && value === "archive" && parts.length === 2) {
+        try {
+          if (command.method === "GET") {
+            return { status: 200, body: { paths: await archivedAgentPaths(itx, actor) } };
+          }
+          if (command.method === "PUT") {
+            const readCatalog = () => itx.cd("/agents").facets.get("agents").snapshot();
+            return { status: 200, body: await setAgentArchived(itx, actor, body, readCatalog) };
+          }
+          fail(405, "Unsupported archive action.");
+        } catch (e) {
+          if (e instanceof AgentArchiveError || e instanceof MobileError) throw e;
+          fail(503, "The archive is temporarily unavailable. Try again.");
+        }
+      }
+      if (resource === "agents" && value === "transcript" && parts.length === 2) {
+        if (command.method !== "POST") fail(405, "Unsupported transcript action.");
+        return { status: 200, body: await agentTranscript(itx, body) };
+      }
+      if (resource === "approvals" && parts.length === 1) {
+        if (command.method !== "GET") fail(405, "Review decisions require a member passkey.");
+        return { status: 200, body: { items: await this.readPendingApprovals(itx) } };
+      }
+      const owner = await hash(actor);
       let result;
+      if (resource === "your-move") {
+        const summary = value === "summary" && parts.length === 2;
+        if (parts.length !== 1 && !summary) fail(404, "Unknown Your Move action.");
+        if (command.method !== "GET") fail(405, "Your Move is read-only.");
+        const [pending, questions] = await Promise.all([
+          this.readPendingApprovals(itx),
+          this.openQuestions(owner, summary),
+        ]);
+        const mail = pending.filter(item => item.kind === "email");
+        return { status: 200, body: summary
+          ? { approvalCount: mail.length, questionCount: questions }
+          : { approvals: mail.map(({ id, title, recipients, reviewURL }) => ({ id, subject: title, to: recipients, reviewURL })), questions } };
+      }
       if (resource === "memories") {
         if (parts.length === 1 && command.method === "GET")
           return await this.memoryRequest(itx, owner, "list", { before: url.searchParams.get("before") });
@@ -381,7 +492,7 @@ export class MobileService {
       } else fail(404, "Unknown Iterate action.");
       return { status: 200, body: result };
     } catch (e) {
-      if (e instanceof MobileError || e instanceof MemoryError)
+      if (e instanceof MobileError || e instanceof MemoryError || e instanceof AgentArchiveError)
         return { status: e.status, body: { error: e.message } };
       throw e;
     }
@@ -391,6 +502,50 @@ export class MobileService {
     const record = await this.storage.get(runKey(owner, runID));
     if (!record) fail(404, "Task not found.");
     return record;
+  }
+
+  async openQuestions(owner, summary) {
+    await this.indexOlderQuestions(owner);
+    return this.storage.transaction(async tx => {
+      const questions = [];
+      let count = 0, startAfter;
+      for (;;) {
+        const page = await tx.list({ prefix: questionPrefix(owner), limit: 128, ...(startAfter && { startAfter }) });
+        if (!page.size) break;
+        count += page.size;
+        if (!summary) {
+          for (const runID of page.values()) {
+            const r = await tx.get(runKey(owner, runID));
+            questions.push({
+              id: r.id, title: r.title, question: segment(r.response, 0, 768),
+              responseLength: r.responseLength || r.response.length, updatedAt: r.updatedAt,
+            });
+          }
+        }
+        startAfter = [...page.keys()].at(-1);
+      }
+      return summary ? count : questions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
+    });
+  }
+
+  async indexOlderQuestions(owner) {
+    // New writes maintain the index in the same transaction as the run. Old runs
+    // can be anywhere in the member's history; resume backfill at the last committed page.
+    const migration = "question-index-v1:" + owner;
+    if (await this.storage.get(migration) === "done") return;
+    for (;;) {
+      const done = await this.storage.transaction(async tx => {
+        const cursor = await tx.get(migration);
+        if (cursor === "done") return true;
+        const page = await tx.list({ prefix: "run:" + owner + ":", limit: 32, ...(cursor && { startAfter: cursor }) });
+        for (const r of page.values()) {
+          if (needsReply(r)) await tx.put(questionPrefix(owner) + r.id, r.id);
+        }
+        await tx.put(migration, page.size ? [...page.keys()].at(-1) : "done");
+        return !page.size;
+      });
+      if (done) return;
+    }
   }
 
   async answer(itx, owner, r) {
@@ -573,7 +728,7 @@ export class MobileService {
         },
         pushRevision: 0,
       };
-      await tx.put(key, value);
+      await saveRun(tx, owner, value);
       await tx.put(indexKey(owner, datestr, runID), runID);
     });
     await this.dispatch(itx, owner, runID);
@@ -630,7 +785,7 @@ export class MobileService {
           files: [],
           failures: 0,
         };
-        await tx.put(runKey(owner, runID), r);
+        await saveRun(tx, owner, r);
         await tx.put(receipt, digest);
       });
     }
@@ -681,7 +836,7 @@ export class MobileService {
           current.updatedAt = nextRevision(current.updatedAt);
           current.pushRevision++;
         }
-        await tx.put(key, current);
+        await saveRun(tx, owner, current);
         for (const [index, file] of work.files.entries())
           for (let part = 0; part < file.parts; part++)
             await tx.delete(inputKey(owner, runID, work.id, index, part));
@@ -704,7 +859,7 @@ export class MobileService {
             for (let part = 0; part < file.parts; part++)
               await tx.delete(inputKey(owner, runID, work.id, index, part));
         }
-        await tx.put(key, current);
+        await saveRun(tx, owner, current);
       });
     }
   }
@@ -738,7 +893,7 @@ export class MobileService {
             current.pushRevision++;
         }
         current.cursor = page.scannedThroughOffset;
-        await tx.put(key, current);
+        await saveRun(tx, owner, current);
         return true;
       });
       if (!applied || page.atHead) break;

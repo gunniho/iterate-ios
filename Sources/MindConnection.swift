@@ -1,5 +1,7 @@
 import Foundation
+import Network
 import Observation
+import UIKit
 
 enum ConnectionPhase: Equatable {
     case disconnected
@@ -15,6 +17,27 @@ enum DevicePairing: Equatable {
     case checking, unpaired, paired(String)
 }
 
+/// The time iOS allows an app to finish up after it leaves the screen.
+@MainActor
+private final class BackgroundStay {
+    private var pass = UIBackgroundTaskIdentifier.invalid
+    private let expired: @MainActor () -> Void
+
+    init(expired: @escaping @MainActor () -> Void) {
+        self.expired = expired
+        pass = UIApplication.shared.beginBackgroundTask(withName: "Iterate connection") { [weak self] in
+            self?.expired()
+            self?.end()
+        }
+    }
+
+    func end() {
+        guard pass != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(pass)
+        pass = .invalid
+    }
+}
+
 @MainActor
 @Observable
 final class MindConnection {
@@ -27,9 +50,17 @@ final class MindConnection {
     }
     #if !ITERATE_VOICE_ONLY
     let directory = AgentDirectory()
+    let conversations = AgentConversations()
     var agentLink: MindSocket? {
         if case .connected = phase { return socket }
         return nil
+    }
+
+    /// Read the agents at the top of the list before one is opened. Low Data Mode waits for the tap.
+    func preloadRecentConversations() {
+        guard let link = agentLink, !lowData, let rows = directory.rows else { return }
+        let count = AgentChatChannel.transcriptRouteMissing ? 1 : 3
+        conversations.preload(IterateAgent.recent(in: rows, excluding: directory.archivedPaths, limit: count).map(\.path), on: link)
     }
 
     /// A first send can outlive its composer while the foreground socket finishes verification.
@@ -51,13 +82,24 @@ final class MindConnection {
     #endif
     let voice = LiveVoice()
     private let client = IterateClient()
-    private let store = CredentialStore()
+    private let store: CredentialStore
     @ObservationIgnored private var launchSession: Task<Credentials?, Error>?
     @ObservationIgnored private var operation: Task<Void, Never>?
     @ObservationIgnored private var operationID = UUID()
     @ObservationIgnored private var socket: MindSocket?
     @ObservationIgnored private var foreground = false
     @ObservationIgnored private var backgroundCall: Task<Void, Never>?
+    /// How long the socket outlives a move to the background, so a glance at another app costs nothing.
+    @ObservationIgnored var backgroundGrace = Duration.seconds(20)
+    @ObservationIgnored private var leftAt: ContinuousClock.Instant?
+    @ObservationIgnored private var networkLost = false
+    @ObservationIgnored private var retries = 0
+    @ObservationIgnored private var retry: Task<Void, Never>?
+    @ObservationIgnored private var network: NWPathMonitor?
+    @ObservationIgnored private var online = true
+    @ObservationIgnored private var lowData = false
+
+    init(store: CredentialStore = CredentialStore()) { self.store = store }
 
     func prepareForLaunch() {
         guard launchSession == nil, pairing == .checking else { return }
@@ -79,6 +121,15 @@ final class MindConnection {
         foreground = true
         backgroundCall?.cancel()
         backgroundCall = nil
+        // iOS can suspend the app before the socket is let go. One held past its grace is not trusted.
+        if let leftAt, leftAt.duration(to: .now) > backgroundGrace + .seconds(5), voice.phase != .live { socket?.close() }
+        leftAt = nil
+        watchNetwork()
+        if networkLost, operation == nil, case .failed = phase {
+            // A failure that was the network's is not shown again to someone returning to the app.
+            networkLost = false
+            phase = .disconnected
+        }
         guard operation == nil, phase == .disconnected else { return }
         let lookup = launchSession
         launchSession = nil
@@ -97,15 +148,20 @@ final class MindConnection {
         guard pairing != next else { return }
         pairing = next
         #if !ITERATE_VOICE_ONLY
+        WidgetSnapshotService.selectPairing(credential?.clientID)
         directory.selectSession(credential?.clientID)
+        conversations.forget()
+        ReviewLists.forget()
         #endif
     }
 
     func background() {
         foreground = false
+        leftAt = .now
+        retry?.cancel()
+        backgroundCall?.cancel()
         #if !ITERATE_VOICE_ONLY
         if voice.phase == .live {
-            backgroundCall?.cancel()
             backgroundCall = Task {
                 while !foreground, voice.phase == .live, !Task.isCancelled {
                     do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
@@ -115,7 +171,19 @@ final class MindConnection {
             return
         }
         #endif
-        closeBackgroundConnection()
+        guard case .connected = phase, backgroundGrace > .zero else {
+            closeBackgroundConnection()
+            return
+        }
+        // iOS grants a short stay after the app leaves the screen. Close before it runs out.
+        let stay = BackgroundStay { [weak self] in
+            if let self, !self.foreground { self.closeBackgroundConnection() }
+        }
+        backgroundCall = Task {
+            try? await Task.sleep(for: backgroundGrace)
+            if !Task.isCancelled, !foreground { closeBackgroundConnection() }
+            stay.end()
+        }
     }
 
     private func closeBackgroundConnection() {
@@ -186,9 +254,35 @@ final class MindConnection {
         }
     }
 
+    /// The path monitor reports when a network returns, which is when a lost connection can be remade.
+    private func watchNetwork() {
+        guard network == nil else { return }
+        let monitor = NWPathMonitor()
+        network = monitor
+        monitor.pathUpdateHandler = { [weak self] path in
+            let reachable = path.status == .satisfied, constrained = path.isConstrained
+            Task { @MainActor in self?.networkChanged(reachable: reachable, constrained: constrained) }
+        }
+        monitor.start(queue: .main)
+    }
+
+    private func networkChanged(reachable: Bool, constrained: Bool) {
+        let returned = reachable && !online
+        online = reachable
+        lowData = constrained
+        if returned { reconnect() }
+    }
+
+    private func reconnect() {
+        guard foreground, networkLost, operation == nil, hasSavedSession, case .failed = phase else { return }
+        activate()
+    }
+
     private func start(_ work: @escaping @MainActor () async throws -> Void) {
         let id = UUID()
         operationID = id
+        networkLost = false
+        retry?.cancel()
         operation = Task {
             defer { if operationID == id { operation = nil } }
             do {
@@ -205,6 +299,15 @@ final class MindConnection {
                     }
                 }
                 phase = .failed(error.localizedDescription)
+                // The network's failures mend themselves. Try again when it returns, and at a slowing pace until then.
+                guard hasSavedSession, (error as? ConnectionIssue) == .lostConnection || error is URLError else { return }
+                networkLost = true
+                let wait = [5, 15, 30, 60][min(retries, 3)]
+                retries += 1
+                retry = Task {
+                    do { try await Task.sleep(for: .seconds(wait)) } catch { return }
+                    reconnect()
+                }
             }
         }
     }
@@ -227,10 +330,16 @@ final class MindConnection {
             let link = MindSocket(transport)
             socket = link
             do {
-                try await link.run { email in
+                #if !ITERATE_VOICE_ONLY
+                let opened: (@MainActor () -> Void)? = { self.directory.ask(on: link) }
+                #else
+                let opened: (@MainActor () -> Void)? = nil
+                #endif
+                try await link.run(opened: opened) { email in
                     guard self.socket === link, self.foreground else { return }
                     failures = 0
                     refreshedAfterRefusal = false
+                    self.retries = 0
                     self.phase = .connected(email: email)
                     #if !ITERATE_VOICE_ONLY
                     AssistantCenter.shared.foregroundSession = (credentials.clientID, link)
@@ -261,9 +370,10 @@ final class MindConnection {
                 } else if let failure = error as? URLError, !failure.isTransient && failure.code != .cancelled {
                     throw failure
                 }
+                // The first reconnection is immediate. Later ones wait as before.
                 failures += 1
-                guard failures <= 2 else { throw ConnectionIssue.lostConnection }
-                try await Task.sleep(for: .seconds(failures * 2))
+                guard failures <= 3 else { throw ConnectionIssue.lostConnection }
+                try await Task.sleep(for: .seconds((failures - 1) * 2))
             }
         }
         phase = .disconnected

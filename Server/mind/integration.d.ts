@@ -7,7 +7,19 @@ export function installIterateMobile(itx: IterateContextApi): Promise<void>;
 export function updateIterateMobile(itx: IterateContextApi, event: WorkerEvent): Promise<void>;
 export function mobileLink(request: Request, host: Pick<IterateConfigEntrypoint, "auth">): Promise<Response | null>;
 
-export function createMobileService(storage: DurableObjectStorage): {
+/** One act held for a member's decision. `reviewURL` is the mind's approval page for its digest. */
+export type PendingApproval = {
+  id: number;
+  kind: "email" | "action";
+  title: string;
+  recipients: string[];
+  heldAt: string;
+  reviewURL: string;
+};
+
+export function createMobileService(storage: DurableObjectStorage, options?: {
+  pendingApprovals?: (itx: IterateContextApi) => Promise<PendingApproval[]>;
+}): {
   request(itx: IterateContextApi, stamp: unknown, command: unknown): Promise<{ status: number; body: unknown }>;
   sync(itx: IterateContextApi, owner: string, runID: string): Promise<void>;
   tick(itx: IterateContextApi, owner: string, runID: string, actionID: string): Promise<void>;

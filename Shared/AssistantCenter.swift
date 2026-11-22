@@ -1,8 +1,16 @@
 import Darwin
 import Foundation
+import WidgetKit
 
 @MainActor
 enum PairedSession {
+    nonisolated static func isAccessDenied(_ error: Error) -> Bool {
+        switch error {
+        case AssistantIssue.unpaired, AssistantIssue.accessDenied, ConnectionIssue.expired, ConnectionIssue.refused: true
+        default: false
+        }
+    }
+
     static func credentials(replacing rejected: String? = nil) async throws -> Credentials {
         let store = CredentialStore()
         guard let original = try store.load() else { throw AssistantIssue.unpaired }
@@ -32,9 +40,8 @@ enum PairedSession {
 
 @MainActor
 struct NativeMindTransport {
-    func request(_ method: String, path: String, body: [String: Any]?, using credentials: Credentials,
-                 over verifiedLink: MindSocket? = nil) async throws -> Data {
-        if let verifiedLink { return try await invoke(method, path: path, body: body, over: verifiedLink) }
+    func withLink<Value: Sendable>(using credentials: Credentials,
+                                   perform: @MainActor (MindSocket) async throws -> Value) async throws -> Value {
         let task = try IterateClient().socket(for: credentials)
         task.maximumMessageSize = 8 * 1024 * 1024
         let link = MindSocket(task)
@@ -52,10 +59,10 @@ struct NativeMindTransport {
         var readiness = ready.stream.makeAsyncIterator()
         guard try await readiness.next() != nil else { throw ConnectionIssue.lostConnection }
         try Task.checkCancellation()
-        return try await invoke(method, path: path, body: body, over: link)
+        return try await perform(link)
     }
 
-    private func invoke(_ method: String, path: String, body: [String: Any]?, over link: MindSocket) async throws -> Data {
+    func invoke(_ method: String, path: String, body: [String: Any]?, over link: MindSocket) async throws -> Data {
         var request: [String: Any] = ["method": method, "path": path]
         if let body { request["body"] = Self.encodeLiteral(body) }
         let value = try await link.call(path: ["mind", "iterateMobile", "request"],
@@ -66,6 +73,7 @@ struct NativeMindTransport {
         }
         guard (200..<300).contains(status) else {
             let reason = (result as? [String: Any])?["error"] as? String
+            if status == 401 || status == 403 { throw AssistantIssue.accessDenied(reason ?? "Iterate declined this request.") }
             if status == 409 { throw AssistantIssue.conflict(reason ?? "Iterate has a newer reply. Check for the latest answer.") }
             throw AssistantIssue.remote(reason ?? "Iterate returned HTTP \(status).")
         }
@@ -124,15 +132,18 @@ final class AssistantCenter {
         return try await post("/runs", body: body, expecting: requestID)
     }
 
-    func refresh(id: UUID) async throws -> IterateRun {
+    func refresh(id: UUID, requiredSession: String? = nil) async throws -> IterateRun {
         let path = "/runs/" + id.uuidString.lowercased()
-        let (data, session) = try await request("GET", path: path)
+        let (data, session) = try await request("GET", path: path, requiredSession: requiredSession)
         var run = try Self.decoder().decode(IterateRun.self, from: data)
         guard run.id == id else { throw ConnectionIssue.invalidResponse }
         var length = run.response?.utf16.count ?? 0
         let total = run.responseLength ?? length
         run.responseLength = total
-        let revision = Date.ISO8601FormatStyle(includingFractionalSeconds: true).format(run.updatedAt)
+        guard length < total else { return run }
+        // The backend compares the wire revision verbatim. Formatting Date can round down one millisecond.
+        struct WireRevision: Decodable { let updatedAt: String }
+        let revision = try JSONDecoder().decode(WireRevision.self, from: data).updatedAt
         while length < total {
             try Task.checkCancellation()
             var query = URLComponents()
@@ -158,7 +169,9 @@ final class AssistantCenter {
         }
         var body = ["id": requestID.uuidString.lowercased(), "text": text]
         body["expectedUpdatedAt"] = expectedUpdatedAt
-        return try await post("/runs/" + id.uuidString.lowercased() + "/reply", body: body, expecting: id, requiredSession: requiredSession)
+        let run = try await post("/runs/" + id.uuidString.lowercased() + "/reply", body: body, expecting: id, requiredSession: requiredSession)
+        WidgetCenter.shared.reloadTimelines(ofKind: IterateAppGroup.yourMoveWidgetKind)
+        return run
     }
 
     func awaitAnswer(
@@ -190,24 +203,34 @@ final class AssistantCenter {
     }
 
     func request(_ method: String, path: String, body: [String: Any]? = nil, requiredSession: String? = nil) async throws -> (Data, String) {
+        try await withPairedSession(requiredSession: requiredSession) { link in
+            try await self.transport.invoke(method, path: path, body: body, over: link)
+        }
+    }
+
+    func withPairedSession<Value: Sendable>(requiredSession: String? = nil,
+                                            perform: @MainActor (MindSocket) async throws -> Value) async throws -> (Value, String) {
         var credentials = try await PairedSession.credentials()
         let session = requiredSession ?? credentials.clientID
         guard credentials.clientID == session else { throw AssistantIssue.changedSession }
-        let data: Data
+        let result: Value
         do {
-            let link = foregroundSession.flatMap { $0.id == credentials.clientID ? $0.link : nil }
-            data = try await transport.request(method, path: path, body: body, using: credentials, over: link)
+            if let foregroundSession, foregroundSession.id == session {
+                result = try await perform(foregroundSession.link)
+            } else {
+                result = try await transport.withLink(using: credentials, perform: perform)
+            }
         } catch ConnectionIssue.refused {
             credentials = try await PairedSession.credentials(replacing: credentials.accessToken)
             guard credentials.clientID == session else { throw AssistantIssue.changedSession }
-            data = try await transport.request(method, path: path, body: body, using: credentials)
+            result = try await transport.withLink(using: credentials, perform: perform)
         } catch ConnectionIssue.lostConnection {
             try Task.checkCancellation()
             guard try CredentialStore().load()?.clientID == session else { throw AssistantIssue.changedSession }
-            data = try await transport.request(method, path: path, body: body, using: credentials)
+            result = try await transport.withLink(using: credentials, perform: perform)
         }
         guard try CredentialStore().load()?.clientID == credentials.clientID else { throw AssistantIssue.changedSession }
-        return (data, credentials.clientID)
+        return (result, session)
     }
 
     static func decoder() -> JSONDecoder {

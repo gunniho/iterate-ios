@@ -35,6 +35,16 @@ final class LiveVoice {
     @ObservationIgnored private var ending: Task<Void, Never>?
     @ObservationIgnored private var frames: [Data] = []
     @ObservationIgnored private var inFlightFrames = 0
+    @ObservationIgnored private var early: EarlyAudio?
+
+    /// A microphone and speaker opened while the relay was still being prepared.
+    @MainActor
+    private final class EarlyAudio {
+        var sound: (any VoiceAudioIO)?
+        var listening: Task<Void, Never>?
+        var opening: Task<Void, Never>?
+        var discarded = false
+    }
     @ObservationIgnored private var pendingEnds: [String: (path: String, reason: String)] = [:]
 
     private let permission: @MainActor () async -> Bool
@@ -81,6 +91,7 @@ final class LiveVoice {
                 relay?.close()
                 relay = nil
                 startWhenReady = false
+                discardEarlyAudio()
                 phase = .failed(error.localizedDescription)
             }
         }
@@ -101,6 +112,7 @@ final class LiveVoice {
         guard let relay, phase != .preparing else {
             startWhenReady = true
             prepare(on: socket)
+            openAudioEarly()
             return
         }
         let id = VoiceRelay.randomID()
@@ -117,32 +129,33 @@ final class LiveVoice {
                     phase = .microphoneDenied
                     return
                 }
-                let sound = makeAudio()
-                audio = sound
-                let stream = try await sound.start { [weak self] message in
-                    guard self?.activation == id else { return }
-                    self?.finish(reason: message, message: message)
+                if let slot = early {
+                    early = nil
+                    await slot.opening?.value
+                    if activation == id, !Task.isCancelled, let sound = slot.sound, let listening = slot.listening {
+                        audio = sound
+                        microphone = listening
+                    } else {
+                        slot.listening?.cancel()
+                        slot.sound?.stop()
+                    }
+                    try Task.checkCancellation()
+                    guard activation == id else { return }
                 }
-                try Task.checkCancellation()
-                guard activation == id else { return }
+                if audio == nil {
+                    let sound = makeAudio()
+                    audio = sound
+                    let stream = try await sound.start { [weak self] message in self?.interrupted(sound, message) }
+                    try Task.checkCancellation()
+                    guard activation == id else { return }
+                    microphone = listen(to: stream, from: sound)
+                }
                 phase = .dialing
                 started = true
                 openingDeadline = Task {
                     do { try await Task.sleep(for: .seconds(8)) } catch { return }
                     guard activation == id, phase == .dialing else { return }
                     finish(reason: "Opening timed out", message: "GPT did not answer in time. Tap to call again.")
-                }
-                microphone = Task {
-                    do {
-                        for try await frame in stream {
-                            guard activation == id, !Task.isCancelled else { return }
-                            if frames.count + inFlightFrames < 40 { frames.append(frame) }
-                            sendWaiting(to: relay, activation: id)
-                        }
-                    } catch {
-                        guard activation == id, !Task.isCancelled else { return }
-                        finish(reason: "Microphone interrupted", message: error.localizedDescription)
-                    }
                 }
                 try await relay.start(id)
                 guard activation == id, !Task.isCancelled else { return }
@@ -164,7 +177,66 @@ final class LiveVoice {
         }
     }
 
+    /// Opening the microphone and speaker takes about as long as preparing the relay, so a call
+    /// that has to wait for its relay opens them meanwhile.
+    private func openAudioEarly() {
+        guard early == nil, audio == nil else { return }
+        let slot = EarlyAudio()
+        early = slot
+        slot.opening = Task { [self] in
+            guard await permission(), !slot.discarded else {
+                if early === slot { early = nil }
+                return
+            }
+            let sound = makeAudio()
+            slot.sound = sound
+            do {
+                let stream = try await sound.start { [weak self] message in self?.interrupted(sound, message) }
+                slot.listening = listen(to: stream, from: sound)
+            } catch {
+                // The call opens its own and reports why it could not.
+                slot.sound = nil
+                sound.stop()
+            }
+            if slot.discarded {
+                slot.listening?.cancel()
+                sound.stop()
+            }
+        }
+    }
+
+    private func discardEarlyAudio() {
+        guard let slot = early else { return }
+        early = nil
+        slot.discarded = true
+        slot.listening?.cancel()
+        slot.sound?.stop()
+    }
+
+    private func interrupted(_ sound: any VoiceAudioIO, _ message: String) {
+        if audio === sound { finish(reason: message, message: message) }
+        else if early?.sound === sound { discardEarlyAudio() }
+    }
+
+    /// Frames are dropped until a call has claimed this microphone and begun dialing.
+    private func listen(to stream: AsyncThrowingStream<Data, Error>, from sound: any VoiceAudioIO) -> Task<Void, Never> {
+        Task { [self] in
+            do {
+                for try await frame in stream {
+                    guard !Task.isCancelled else { return }
+                    guard audio === sound, started, let id = activation, let relay else { continue }
+                    if frames.count + inFlightFrames < 40 { frames.append(frame) }
+                    sendWaiting(to: relay, activation: id)
+                }
+            } catch {
+                guard audio === sound, activation != nil, !Task.isCancelled else { return }
+                finish(reason: "Microphone interrupted", message: error.localizedDescription)
+            }
+        }
+    }
+
     func hangUp() {
+        discardEarlyAudio()
         if startWhenReady {
             preparation?.cancel()
             preparation = nil
@@ -218,6 +290,7 @@ final class LiveVoice {
     }
 
     private func finish(reason: String, message: String? = nil, remoteEnded: Bool = false) {
+        discardEarlyAudio()
         guard let id = activation else { return }
         let needsHangUp = started && !remoteEnded
         activation = nil

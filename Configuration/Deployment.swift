@@ -39,11 +39,20 @@ struct Deployment: Sendable {
         dashHost = dash ?? "dash.example.org"
         mindID = validPin ? pin : emptyPin
         bundleID = validBundle ? bundle : "org.example.iterate"
-        isConfigured = apex != nil && control != nil && dash != nil && validBundle && mindID != emptyPin
+        #if DEBUG
+        // A Debug build launched with ITERATE_DEV_MIND=http://127.0.0.1:8787 talks to the local stand-in
+        // in Server/tests/dev-mind.mjs. Its sign-in has its own Keychain entry, apart from the workspace's.
+        let standIn = ProcessInfo.processInfo.environment["ITERATE_DEV_MIND"].flatMap(URL.init(string:)).flatMap {
+            $0.scheme == "http" && $0.host == "127.0.0.1" && $0.path.isEmpty ? $0 : nil
+        }
+        #else
+        let standIn: URL? = nil
+        #endif
+        isConfigured = standIn != nil || (apex != nil && control != nil && dash != nil && validBundle && mindID != emptyPin)
         website = URL(string: "https://" + apexHost)!
-        issuer = URL(string: "https://" + controlHost)!
+        issuer = standIn ?? URL(string: "https://" + controlHost)!
         resource = issuer.appendingPathComponent("api")
-        socket = URL(string: "wss://" + controlHost + "/api")!
+        socket = standIn.map { URL(string: "ws://127.0.0.1:\($0.port ?? 80)/api")! } ?? URL(string: "wss://" + controlHost + "/api")!
         verificationPage = issuer.appendingPathComponent("oauth2/device")
         credentialAccount = resource.absoluteString + "#" + mindID
         // The issuer is also part of the scope because OAuth tokens have a specific audience.

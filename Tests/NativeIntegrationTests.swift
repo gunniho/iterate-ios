@@ -21,6 +21,8 @@ final class NativeIntegrationTests: XCTestCase {
     }
 
     func testAssistantAndCaptureLinksOpenNativelyAndPreviousResultLinksOpenOnTheWeb() {
+        XCTAssertEqual(NativeDestination.yourMove.url.absoluteString, Deployment.current.urlScheme + "://your-move")
+        XCTAssertEqual(NativeDestination(url: NativeDestination.yourMove.url), .yourMove)
         for destination in [NativeDestination.newAgent, .talk, .capture, .camera, .briefing] {
             XCTAssertEqual(NativeDestination(url: destination.url), destination)
             let schemeURL = URL(string: Deployment.current.urlScheme + "://" + destination.url.lastPathComponent)!

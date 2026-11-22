@@ -74,11 +74,12 @@ targets:
       - target: IterateKeyboard
       - target: IterateWatch
   IterateWidgets:
-    templates: [Extension]
+    templates: [Extension, AssistantService]
     sources:
       - {path: Extensions/Widgets, excludes: [Info.plist]}
-      - Shared/AssistantReply.swift
-      - Shared/NativeLinks.swift
+      - Native/Agents/IterateAgent.swift
+      - Native/Agents/RecentAgentsSnapshot.swift
+      - Native/Agents/RecentAgentsTimeline.swift
       - Intents/NavigationIntents.swift
       - Intents/Alarms.swift
       - Capture/CameraControl

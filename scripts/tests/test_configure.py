@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -51,6 +52,13 @@ class SetupTests(unittest.TestCase):
         installed_at = (self.installed / "backend.ts").stat().st_mtime_ns
         self.run_setup(self.args)
         self.assertEqual((self.installed / "backend.ts").stat().st_mtime_ns, installed_at)
+
+    def test_every_installed_module_finds_its_imports(self):
+        self.run_setup(self.args)
+        present = {path.name for path in self.installed.iterdir()}
+        for name in configure.MODULES:
+            for target in re.findall(r'from\s+"\./([^"]+)"', (self.installed / name).read_text()):
+                self.assertIn(target, present, f"{name} imports {target}")
 
     def test_configuring_a_fork_respects_existing_worker_and_local_edits(self):
         (self.mind / "worker.ts").write_text("// Existing worker\n")

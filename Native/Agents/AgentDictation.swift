@@ -58,9 +58,13 @@ final class AgentDictation {
         }
         do {
             let audio = AVAudioSession.sharedInstance()
-            try audio.setCategory(.record, mode: .measurement, options: [.allowBluetoothHFP])
-            try audio.setActive(true)
             audioActive = true
+            try await CallAudio.changeSession { session in
+                try session.setCategory(.record, mode: .measurement, options: [.allowBluetoothHFP])
+                try session.setActive(true)
+            }
+            // Leaving while the microphone opened has already queued its release.
+            guard sessionID == id else { return }
             let recorder = AVAudioEngine()
             let input = recorder.inputNode
             let format = input.outputFormat(forBus: 0)
@@ -134,7 +138,7 @@ final class AgentDictation {
             self.engine = nil
         }
         if audioActive {
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            CallAudio.releaseSession()
             audioActive = false
         }
     }

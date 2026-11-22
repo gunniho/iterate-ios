@@ -1,12 +1,14 @@
 import Foundation
 
 enum NativeDestination: Equatable, Hashable, Sendable {
-    case newAgent, talk, capture, camera, briefing
+    case agents, newAgent, talk, capture, camera, briefing, yourMove
     case web(URL)
 
     init?(url: URL) {
         guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
               parts.user == nil, parts.password == nil, parts.port == nil else { return nil }
+        if url == NativeDestination.yourMove.url { self = .yourMove; return }
+        if url == NativeDestination.agents.url { self = .agents; return }
         let segments: [String]
         if parts.scheme == "https", parts.host?.lowercased() == Deployment.current.apexHost {
             segments = parts.path.split(separator: "/").map(String.init)
@@ -30,11 +32,13 @@ enum NativeDestination: Equatable, Hashable, Sendable {
     var url: URL {
         let path: String
         switch self {
+        case .agents: return URL(string: Deployment.current.urlScheme + "://agents")!
         case .newAgent: path = "new-agent"
         case .talk: path = "talk"
         case .capture: path = "capture"
         case .camera: path = "camera"
         case .briefing: path = "briefing"
+        case .yourMove: return URL(string: Deployment.current.urlScheme + "://your-move")!
         case let .web(url): return url
         }
         return Deployment.current.website.appendingPathComponent(path)

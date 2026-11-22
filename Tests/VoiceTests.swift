@@ -77,6 +77,37 @@ final class VoiceTests: XCTestCase {
     #endif
 
     @MainActor
+    func testACallOpensItsMicrophoneWhileItsRelayIsPreparedAndReleasesItWhenAbandoned() async throws {
+        // A socket that never answers keeps the relay in preparation.
+        let link = MindSocket(URLSession.shared.webSocketTask(with: Deployment.current.socket))
+        defer { link.close() }
+        let fixture = SpeechFixture(frames: [])
+        fixture.permissionGranted = true
+        let voice = LiveVoice(permission: { fixture.permissionGranted }, makeAudio: { fixture })
+        voice.attach(to: link, prepareImmediately: false)
+        voice.start(for: .agent(path: "/agents/example", draftID: nil))
+        XCTAssertEqual(voice.phase, .preparing)
+        XCTAssertTrue(voice.isBusy)
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !fixture.started, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertTrue(fixture.started)
+        XCTAssertEqual(voice.phase, .preparing)
+        XCTAssertFalse(fixture.stopped)
+        voice.hangUp()
+        XCTAssertTrue(fixture.stopped)
+        XCTAssertFalse(voice.isBusy)
+
+        // Without permission nothing is opened ahead of the call.
+        let silent = SpeechFixture(frames: [])
+        let refused = LiveVoice(permission: { false }, makeAudio: { silent })
+        refused.attach(to: link, prepareImmediately: false)
+        refused.start()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertFalse(silent.started)
+        refused.detach(from: link)
+    }
+
+    @MainActor
     func testSignedInDeviceCanTalkToGPTAndHangUp() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["ITERATE_LIVE_VOICE_TEST"] == "1",
                           "This test opens a real call using the signed-in device.")
