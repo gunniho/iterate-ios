@@ -5,7 +5,7 @@ import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { installIterateMobile, mobileLink, updateIterateMobile } from "../mind/integration.js";
+import { createMobileService, installIterateMobile, mobileLink, updateIterateMobile } from "../mind/integration.js";
 import { agentPath, hash, MOBILE_RULE, MOBILE_TARGET, TICK } from "../mind/mobile.js";
 import { deployment } from "../mind/settings.js";
 
@@ -106,4 +106,37 @@ test("a copied backend serves only its configured apex and uses its own Dash and
     token: "ab".repeat(32), type: "alert", environment: "sandbox", collapseId: runID, payload: { aps: {} },
   });
   assert.equal(topic, settings.bundleID);
+});
+
+test("a held act alerts the phone from the platform's own record, and a mind supplies its inbox", async () => {
+  const waited = [];
+  const itx = { iterateMobile: { waiting: async note => waited.push(note), reconcile: async () => {}, tick: async () => {} } };
+  const digest = "ab".repeat(32);
+  const held = { path: "/approvals", type: "events.iterate.com/approval/act-held", source: { platform: true },
+    payload: { digest, act: "email.send" } };
+  await updateIterateMobile(itx, held);
+  await updateIterateMobile(itx, { ...held, payload: { digest, act: "itx.calendar.send" } });
+  // Anything but the gate's own record of a known act alerts nobody.
+  await updateIterateMobile(itx, { ...held, source: {} });
+  await updateIterateMobile(itx, { ...held, source: { platform: true, copiedFrom: "/elsewhere" } });
+  await updateIterateMobile(itx, { ...held, ephemeral: true });
+  await updateIterateMobile(itx, { ...held, path: "/agents/a" });
+  await updateIterateMobile(itx, { ...held, type: "events.iterate.com/approval/act-approved" });
+  await updateIterateMobile(itx, { ...held, payload: { digest, act: "other.verb" } });
+  await updateIterateMobile(itx, { ...held, payload: { digest: "short", act: "email.send" } });
+  assert.deepEqual(waited, [{ key: digest, kind: "email" }, { key: digest, kind: "action" }]);
+
+  const member = { member: true, principal: { actor: "member-a" } };
+  const read = { method: "GET", path: "/approvals?signatures=1" };
+  assert.deepEqual(await createMobileService({}).request({}, member, read), { status: 200, body: { items: [], decided: [] } });
+  const asked = [];
+  const item = { id: 7, kind: "signature", title: "Sign", recipients: [], heldAt: "2026-01-01T00:00:00.000Z", reviewURL: "https://iterate.example.org/statements/sign?draft=abcdefgh" };
+  const supplied = createMobileService({}, { approvalInbox: async (root, signatures) => {
+    asked.push(signatures);
+    return { items: signatures ? [item] : [], decided: [] };
+  } });
+  assert.deepEqual((await supplied.request({}, member, read)).body.items, [item]);
+  assert.deepEqual((await supplied.request({}, member, { method: "GET", path: "/approvals" })).body.items, []);
+  assert.deepEqual(asked, [true, false]);
+  assert.equal((await supplied.request({}, member, { method: "POST", path: "/approvals" })).status, 405);
 });

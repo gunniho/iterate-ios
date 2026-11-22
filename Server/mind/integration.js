@@ -7,10 +7,12 @@ import { deployment } from "./settings.js";
 export { openAgentVoice } from "./agent-voice.js";
 export { partsOfAgent };
 
-// The approvals inbox and Your move list what a mind holds for a member's decision. A mind that
-// holds mail or agent actions passes its reader as `pendingApprovals`. Without one the inbox is empty.
-export function createMobileService(storage, { pendingApprovals = async () => [] } = {}) {
-  return new MobileService(storage, sendPush, pendingApprovals);
+// Approvals and Your move list what a mind holds for a member's decision, and what was decided
+// lately. A mind that holds mail, agent actions or statements passes its reader as `approvalInbox`.
+// It is called with the mind's root and whether the phone also reads signature requests. Without
+// one both lists are empty.
+export function createMobileService(storage, { approvalInbox = async () => ({ items: [], decided: [] }) } = {}) {
+  return new MobileService(storage, sendPush, approvalInbox);
 }
 
 export async function installIterateMobile(itx) {
@@ -25,7 +27,21 @@ export async function installIterateMobile(itx) {
   });
 }
 
+// What starts to wait for a member, as the phone's alert names it: an act the gate holds, by the
+// platform's own record. A mind with requests of its own calls `itx.iterateMobile.waiting` for them.
+function waitingNote(event) {
+  const p = event.payload;
+  if (event.ephemeral || event.source?.copiedFrom || !p) return;
+  if (event.path === "/approvals" && event.type === "events.iterate.com/approval/act-held" && event.source?.platform === true) {
+    if (typeof p.digest !== "string" || !/^[a-f0-9]{64}$/.test(p.digest) || typeof p.act !== "string") return;
+    const kind = p.act === "email.send" ? "email" : p.act.startsWith("itx.") ? "action" : undefined;
+    return kind && { key: p.digest, kind };
+  }
+}
+
 export async function updateIterateMobile(itx, event) {
+  const note = waitingNote(event);
+  if (note) await itx.iterateMobile.waiting(note);
   if (partsOfAgent(event.path) && trackedEvents.has(event.type))
     await itx.iterateMobile.reconcile(event.path);
   if (event.type === TICK && event.path === "/" && event.source?.schedule) {

@@ -30,7 +30,6 @@ enum TaskInboxUpgrade {
         do {
             let root = try IterateAppGroup.container()
             WidgetCenter.shared.reloadTimelines(ofKind: Deployment.current.bundleID + ".today")
-            if UIApplication.shared.isRegisteredForRemoteNotifications { UIApplication.shared.unregisterForRemoteNotifications() }
             for activity in Activity<IterateRunAttributes>.activities { await activity.end(nil, dismissalPolicy: .immediate) }
 
             let center = UNUserNotificationCenter.current()

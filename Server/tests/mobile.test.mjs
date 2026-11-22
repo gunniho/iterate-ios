@@ -47,7 +47,7 @@ class Store {
     return tx;
   }
 }
-function fixture(readPendingApprovals) {
+function fixture(readApprovalInbox) {
   const storage = new Store(),
     logs = new Map(),
     messages = new Map(),
@@ -118,7 +118,7 @@ function fixture(readPendingApprovals) {
   const service = new MobileService(storage, async (_itx, j) => {
     pushes.push(j);
     return "accepted";
-  }, readPendingApprovals);
+  }, readApprovalInbox);
   const call = (actor, method, path, body) =>
     service.request(
       itx,
@@ -148,8 +148,12 @@ test("Your Move includes old open questions only for their owner and returns a p
     { id: 12, kind: "email", title: approval.subject, recipients: approval.to, heldAt, reviewURL: approval.reviewURL },
     { id: 13, kind: "action", title: "itx.calendar.send", recipients: [], heldAt, reviewURL: "https://example.org/review-action" },
   ];
+  const decided = [{ id: 9, kind: "email", title: "Earlier mail", recipients: [], heldAt, outcome: "approved", decidedAt: heldAt }];
+  const signing = { id: 1_000_000_004, title: "Create example.org/banana", reviewURL: "https://example.org/sign" };
+  const toSign = { id: signing.id, kind: "signature", title: signing.title, recipients: [], heldAt, reviewURL: signing.reviewURL };
   let approvalReads = 0;
-  const f = fixture(async () => { approvalReads++; return pending; });
+  // A phone names signature requests to get them: an older build cannot read their kind.
+  const f = fixture(async (_itx, signatures) => { approvalReads++; return { items: signatures ? [...pending, toSign] : pending, decided }; });
   const actor = "member-one";
   const owner = await hash(actor);
   const first = randomUUID();
@@ -181,7 +185,7 @@ test("Your Move includes old open questions only for their owner and returns a p
   assert.ok(interruptedCursor);
   assert.equal(await f.storage.get("question-index-v1:" + owner), interruptedCursor);
   f.storage.list = list;
-  assert.deepEqual(await f.call(actor, "GET", route), { status: 200, body: { approvals: [approval], questions: [
+  assert.deepEqual(await f.call(actor, "GET", route), { status: 200, body: { approvals: [approval], signatures: [signing], questions: [
     { id: first, title: "Plan a visit", question: "Which day?", responseLength: 10, updatedAt: current.updatedAt },
     { ...old, question: "Still available?", responseLength: 16 },
   ] } });
@@ -195,11 +199,12 @@ test("Your Move includes old open questions only for their owner and returns a p
     assert.ok(!options.prefix.startsWith("run:"), "older runs have already been indexed");
     return originalList(options);
   };
-  assert.deepEqual(await f.call(actor, "GET", summary), { status: 200, body: { approvalCount: 1, questionCount: 2 } });
+  assert.deepEqual(await f.call(actor, "GET", summary), { status: 200, body: { approvalCount: 3, questionCount: 2 } });
   f.storage.get = originalGet;
   f.storage.list = originalList;
-  assert.deepEqual((await f.call("member-two", "GET", route, { actor })).body, { approvals: [approval], questions: [] });
-  assert.deepEqual(await f.call(actor, "GET", "/approvals"), { status: 200, body: { items: pending } });
+  assert.deepEqual((await f.call("member-two", "GET", route, { actor })).body, { approvals: [approval], signatures: [signing], questions: [] });
+  assert.deepEqual(await f.call(actor, "GET", "/approvals"), { status: 200, body: { items: pending, decided } });
+  assert.deepEqual(await f.call(actor, "GET", "/approvals?signatures=1"), { status: 200, body: { items: [...pending, toSign], decided } });
   const readsBeforeDenied = approvalReads;
   for (const path of [route, summary, "/approvals"]) {
     assert.equal((await f.call(undefined, "GET", path)).status, 401);
@@ -212,7 +217,7 @@ test("Your Move includes old open questions only for their owner and returns a p
   assert.equal((await f.call(actor, "POST", "/runs/" + first + "/reply", {
     id: randomUUID(), text: "Tuesday", expectedUpdatedAt: current.updatedAt,
   })).status, 200);
-  assert.deepEqual((await f.call(actor, "GET", summary)).body, { approvalCount: 1, questionCount: 1 });
+  assert.deepEqual((await f.call(actor, "GET", summary)).body, { approvalCount: 3, questionCount: 1 });
   const longQuestion = "a".repeat(767) + "🌍" + "b".repeat(23_000);
   f.append(path, "web-message-sent", { message: "[[ITERATE_NEEDS_INPUT]]\n" + longQuestion, llmRequestOffset: 9 });
   await f.service.sync(f.itx, owner, first);
@@ -222,7 +227,7 @@ test("Your Move includes old open questions only for their owner and returns a p
   assert.notEqual(latest.updatedAt, current.updatedAt);
   f.append(path, "paused", {});
   await f.service.sync(f.itx, owner, first);
-  assert.deepEqual((await f.call(actor, "GET", summary)).body, { approvalCount: 1, questionCount: 1 });
+  assert.deepEqual((await f.call(actor, "GET", summary)).body, { approvalCount: 3, questionCount: 1 });
 });
 
 test("APNs registrations use the enrolled app's topic and leave previous topics dormant", async () => {
@@ -550,6 +555,11 @@ test("invalid routes and attachment payloads never create agent messages", async
     (await f.call("member", "GET", "//other.example/runs")).status,
     400,
   );
+  // A backslash reads as a slash in a web address, so this path names another host too.
+  assert.equal(
+    (await f.call("member", "GET", "/\\other.example/runs")).status,
+    400,
+  );
   assert.equal(f.messages.size, 0);
 });
 test("a background submission starts an activity on its own phone and possession transfers Apple tokens at account switch", async () => {
@@ -865,4 +875,24 @@ test("transcript widens over quiet stretches, follows short pages and bounds its
   assert.equal(heavy.events.at(-1).offset, 30);
   const rest = await agentTranscript(agentLog(long).itx, { path: "/agents/chat", through: heavy.floor });
   assert.equal(rest.events.at(-1).offset, heavy.floor);
+});
+
+test("a request that starts to wait alerts each registered phone once and names its kind alone", async () => {
+  const f = fixture(async () => ({ items: [], decided: [] }));
+  const device = randomUUID(), other = randomUUID();
+  await f.call("member-one", "PUT", "/devices/" + device, { environment: "sandbox", bundleID: appTopic, notificationToken: testToken });
+  await f.call("member-two", "PUT", "/devices/" + other, { environment: "production", bundleID: appTopic, notificationToken: null });
+  const digest = "ab".repeat(32);
+  for (const bad of [undefined, { key: digest, kind: "other" }, { key: "short", kind: "email" }, { key: digest + "/x", kind: "email" }])
+    await f.service.waiting(f.itx, bad);
+  assert.equal(f.pushes.length, 0);
+  await f.service.waiting(f.itx, { key: digest, kind: "confirm" });
+  await f.service.waiting(f.itx, { key: digest, kind: "confirm" });
+  assert.equal(f.pushes.length, 1);
+  const [sent] = f.pushes;
+  assert.deepEqual([sent.type, sent.token, sent.environment, sent.collapseId], ["alert", testToken, "sandbox", "iterate-waiting-" + digest.slice(0, 32)]);
+  assert.deepEqual(sent.payload, { aps: { category: "ITERATE_WAITING", "thread-id": "your-move", sound: "default",
+    alert: { title: "Iterate", body: "An agent is asking for your yes." } }, waiting: "confirm" });
+  await f.service.waiting(f.itx, { key: "kiwi-2026-11-22", kind: "signature" });
+  assert.equal(f.pushes.at(-1).payload.aps.alert.body, "A statement is waiting for your signature.");
 });

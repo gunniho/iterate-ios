@@ -404,6 +404,25 @@ final class ConversationFlowTests: DevMindTestCase {
         other.close()
     }
 
+    func testYourMoveReadsTheInboxAMindAnswers() async throws {
+        _ = try await reset()
+        let connection = try await connected()
+        let link = try XCTUnwrap(connection.agentLink)
+        let facet = NativeMindTransport()
+        let read = try await facet.invoke("GET", path: "/approvals?signatures=1", body: nil, over: link)
+        let inbox = try AssistantCenter.decoder().decode(ApprovalInbox.self, from: read)
+        XCTAssertEqual(inbox.items.map(\.kind), [.email, .action, .signature])
+        XCTAssertTrue(inbox.items.allSatisfy { ApprovalReviewLink.item($0.reviewURL) != nil })
+        XCTAssertEqual(inbox.decided.map(\.outcome), [.approved])
+        // A phone from before signature requests is not sent one.
+        let earlier = try await facet.invoke("GET", path: "/approvals", body: nil, over: link)
+        XCTAssertEqual(try AssistantCenter.decoder().decode(ApprovalInbox.self, from: earlier).items.map(\.kind), [.email, .action])
+        let summary = try await facet.invoke("GET", path: "/your-move/summary", body: nil, over: link)
+        let counts = try JSONDecoder().decode(YourMoveCounts.self, from: summary)
+        XCTAssertEqual(counts.approvalCount, 3)
+        XCTAssertEqual(counts.questionCount, 0)
+    }
+
     func testTheListPreloadsItsFirstAgentsAndAPairingChangeForgetsThem() async throws {
         let agents = try await reset()
         let connection = try await connected()

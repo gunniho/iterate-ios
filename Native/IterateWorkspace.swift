@@ -30,6 +30,7 @@ struct IterateWorkspace: View {
     @State private var browser: BrowserPage?
     @State private var message: String?
     @State private var pendingRoute: NativeDestination?
+    @State private var waitingApprovals = 0
     @State private var lastYourMoveReload: (session: String, date: Date)?
 
     init(connection: MindConnection, requestedAgents: [AgentConversation], consume: @escaping ([AgentConversation]) -> Void) {
@@ -43,14 +44,9 @@ struct IterateWorkspace: View {
         NavigationStack(path: $path) {
             AgentsHome(connection: connection, isVisible: path.isEmpty, connect: pair) { path.append(.agent($0.path)) }
                 .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button { path = [.approvals] } label: {
-                            Label("Approvals", systemImage: "signature")
-                        }
-                    }
+                    approvalsItem
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
-                            Button { path = [.yourMove] } label: { Label("Your move", systemImage: "tray") }
                             Button { path = [.assistant] } label: { Label("Assistant", systemImage: "waveform") }
                             Button { path = [.settings] } label: { Label("Settings", systemImage: "gearshape") }
                         } label: { Image(systemName: "ellipsis.circle") }
@@ -90,6 +86,16 @@ struct IterateWorkspace: View {
         .task(id: scenePhase == .active) {
             if scenePhase == .active { await TaskInboxUpgrade.removeLocalInbox() }
         }
+        .task(id: approvalCountScope) {
+            guard let sessionID = approvalCountScope else { return }
+            // A request that starts waiting while this screen is up should reach the badge unasked.
+            while !Task.isCancelled {
+                if let counts = try? await YourMoveCounts.fetch(requiredSession: sessionID), !Task.isCancelled {
+                    waitingApprovals = counts.approvalCount + counts.questionCount
+                }
+                do { try await Task.sleep(for: .seconds(8)) } catch { return }
+            }
+        }
         .task(id: connection.agentLink != nil && scenePhase == .active) {
             if connection.agentLink != nil, scenePhase == .active { await TaskInboxUpgrade.retirePushRegistration() }
         }
@@ -118,6 +124,30 @@ struct IterateWorkspace: View {
             for draft in requests where !path.contains(.newAgent(draft)) { openNewAgent(draft) }
             consume(requests)
         }
+    }
+
+    private var approvalsButton: some View {
+        Button { path = [.yourMove] } label: { Label("Your move", systemImage: "tray") }
+            .accessibilityValue(waitingApprovals > 0 ? Text("\(waitingApprovals) waiting") : Text(""))
+    }
+
+    private var approvalsItem: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            // Toolbar buttons draw a badge from iOS 26. Earlier systems get a dot.
+            if #available(iOS 26, *) { approvalsButton.badge(waitingApprovals) }
+            else {
+                approvalsButton.overlay(alignment: .topTrailing) {
+                    if waitingApprovals > 0 {
+                        Circle().fill(.red).frame(width: 8, height: 8).offset(x: 2, y: -2).accessibilityHidden(true)
+                    }
+                }
+            }
+        }
+    }
+
+    private var approvalCountScope: String? {
+        guard scenePhase == .active, path.isEmpty, case .paired(let sessionID) = connection.pairing else { return nil }
+        return sessionID
     }
 
     @ViewBuilder private func screen(_ destination: Screen) -> some View {
@@ -154,8 +184,7 @@ struct IterateWorkspace: View {
         case .pair: connectionScreen
         case .approvals, .yourMove:
             if case .paired(let sessionID) = connection.pairing {
-                if destination == .approvals { ApprovalsView(sessionID: sessionID).id(sessionID) }
-                else { YourMoveView(sessionID: sessionID).id(sessionID) }
+                ApprovalsView(sessionID: sessionID).id(sessionID)
             } else if connection.pairing == .checking {
                 ProgressView("Checking your connection…")
             } else { connectionScreen }
@@ -286,6 +315,7 @@ struct IterateWorkspace: View {
         }
         pendingRoute = nil
         browser = nil
+        waitingApprovals = 0
         BriefingPlayer.shared.stop()
         IterateScreenShare.shared.stop()
         showBriefing = false

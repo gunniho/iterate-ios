@@ -1,17 +1,6 @@
 import SwiftUI
 import WidgetKit
 
-struct YourMoveApproval: Decodable, Identifiable {
-    let id: Int
-    let subject: String
-    let to: [String]
-    let reviewURL: String
-
-    var trustedReviewURL: URL? {
-        ApprovalReviewLink.item(reviewURL)
-    }
-}
-
 struct YourMoveQuestion: Decodable, Identifiable {
     let id: UUID
     let title: String
@@ -36,147 +25,17 @@ struct YourMoveQuestion: Decodable, Identifiable {
     }
 }
 
-private struct YourMoveDetails: Decodable {
-    let approvals: [YourMoveApproval]
-    var questions: [YourMoveQuestion]
-}
+/// The questions of `/your-move`. What else waits is read from `/approvals`.
+struct YourMoveQuestions: Decodable {
+    let questions: [YourMoveQuestion]
 
-struct YourMoveView: View {
-    let sessionID: String
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var details: YourMoveDetails?
-    @State private var loadingID = UUID()
-    @State private var issue: String?
-    @State private var notice: String?
-    @State private var reviewing: YourMoveApproval?
-
-    init(sessionID: String) {
-        self.sessionID = sessionID
-        _details = State(initialValue: ReviewLists.recall("your-move", for: sessionID))
-    }
-
-    var body: some View {
-        List {
-            if let notice {
-                Text(notice).font(.callout).foregroundStyle(.secondary)
-            }
-            if let issue {
-                Section {
-                    Text(issue)
-                    Button("Try again") { Task { await reload() } }
-                }
-            }
-            if let details {
-                if details.approvals.isEmpty && details.questions.isEmpty {
-                    ContentUnavailableView("You're all caught up", systemImage: "checkmark.circle",
-                                           description: Text("No mail approvals or questions are waiting for you."))
-                        .listRowBackground(Color.clear)
-                }
-                if !details.approvals.isEmpty {
-                    Section("Mail to approve") {
-                        ForEach(details.approvals) { approval in
-                            Button { review(approval) } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(verbatim: approval.subject.isEmpty ? "Untitled email" : approval.subject)
-                                            .foregroundStyle(.primary)
-                                        if !approval.to.isEmpty {
-                                            Text(verbatim: approval.to.joined(separator: ", "))
-                                                .font(.subheadline).foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right").font(.caption.weight(.semibold))
-                                        .foregroundStyle(.tertiary).accessibilityHidden(true)
-                                }
-                            }
-                            .accessibilityHint("Review this email with your passkey.")
-                        }
-                    }
-                }
-                if !details.questions.isEmpty {
-                    Section("Questions") {
-                        ForEach(details.questions) { question in
-                            YourMoveReply(question: question, sessionID: sessionID) { accepted in
-                                if accepted {
-                                    self.details?.questions.removeAll { $0.id == question.id && $0.updatedAt == question.updatedAt }
-                                    notice = "Reply sent."
-                                } else {
-                                    notice = "This question changed. Check the latest questions before replying."
-                                }
-                                await reload()
-                            }
-                            .id(question.updatedAt)
-                        }
-                    }
-                }
-            } else if issue == nil {
-                ProgressView("Checking what needs you…")
-            }
-        }
-        .privacySensitive()
-        .navigationTitle("Your move")
-        .refreshable { await reload() }
-        .task(id: scenePhase) {
-            if scenePhase == .active { await reload() }
-        }
-        .sheet(item: $reviewing, onDismiss: {
-            WidgetCenter.shared.reloadTimelines(ofKind: IterateAppGroup.yourMoveWidgetKind)
-            Task { await reload() }
-        }) { approval in
-            if let url = approval.trustedReviewURL {
-                IterateBrowser(url: url).ignoresSafeArea()
-            }
-        }
-    }
-
-    private func review(_ approval: YourMoveApproval) {
-        do {
-            guard try CredentialStore().load()?.clientID == sessionID else { throw AssistantIssue.changedSession }
-            guard approval.trustedReviewURL != nil else { throw ConnectionIssue.invalidResponse }
-            notice = nil
-            reviewing = approval
-        } catch {
-            details = nil
-            issue = error.localizedDescription
-        }
-    }
-
-    private func reload() async {
-        let requestID = UUID()
-        loadingID = requestID
-        let started = Date.now
-        do {
-            let (data, _) = try await AssistantCenter.shared.request("GET", path: "/your-move", requiredSession: sessionID)
-            let latest = try JSONDecoder().decode(YourMoveDetails.self, from: data)
-            guard !Task.isCancelled, loadingID == requestID else { return }
-            details = latest
-            issue = nil
-            ReviewLists.keep(latest, as: "your-move", for: sessionID)
-            let snapshot = YourMoveSnapshot(approvalCount: latest.approvals.count,
-                                            questionCount: latest.questions.count, checkedAt: started)
-            YourMoveSnapshotStore.save(snapshot, for: sessionID)
-            WidgetCenter.shared.reloadTimelines(ofKind: IterateAppGroup.yourMoveWidgetKind)
-        } catch {
-            guard !Task.isCancelled, loadingID == requestID else { return }
-            let rejected = PairedSession.isAccessDenied(error)
-            if rejected {
-                YourMoveSnapshotStore.invalidate(for: sessionID, through: started)
-                WidgetCenter.shared.reloadTimelines(ofKind: IterateAppGroup.yourMoveWidgetKind)
-            }
-            let paired = (try? CredentialStore().load()?.clientID) == sessionID
-            if !paired { reviewing = nil }
-            // What was last read stays up through a network failure. It goes when the session does.
-            if !paired || rejected {
-                details = nil
-                ReviewLists.keep(nil as YourMoveDetails?, as: "your-move", for: sessionID)
-            }
-            issue = error.localizedDescription
-        }
+    @MainActor static func load(sessionID: String) async throws -> [YourMoveQuestion] {
+        let (data, _) = try await AssistantCenter.shared.request("GET", path: "/your-move", requiredSession: sessionID)
+        return try JSONDecoder().decode(YourMoveQuestions.self, from: data).questions
     }
 }
 
-private struct YourMoveReply: View {
+struct YourMoveReply: View {
     let question: YourMoveQuestion
     let sessionID: String
     let resolved: (Bool) async -> Void

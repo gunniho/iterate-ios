@@ -51,19 +51,23 @@ The iPhone signs in to your control-plane hostname using Iterate’s device flow
 
 The mobile facet scopes runs, notes, attachments and device registrations to the actor in the authenticated member session. Requests and replies use stable UUIDs so delivery can resume after a disconnect. **Remember** saves the member’s original note. **Ask** retrieves relevant notes and **Briefing** can include recent work. When the mind’s AI enrichment is unavailable, the memory store can still match note text locally.
 
-## Approvals and Your move
+## Your move: approvals and signatures
 
-**Approvals** and the **Your move** widget list what your mind is holding for a member's decision, such as an outgoing email or an agent action. The template has no source of held acts of its own, so both start empty. To fill them, pass a reader when `backend.ts` creates the service.
+**Your move** lists what your mind is holding for a member's decision: outgoing email, agent actions and statements to sign. The template has no source of these of its own, so the list starts empty. To fill it, pass a reader when `backend.ts` creates the service.
 
 ```ts
-#service = createMobileService(this.ctx.storage, { pendingApprovals });
+#service = createMobileService(this.ctx.storage, { approvalInbox });
 ```
 
-`pendingApprovals(itx)` returns one row for each held act: `{ id, kind, title, recipients, heldAt, reviewURL }`. `kind` is `"email"` or `"action"`, and `heldAt` is an ISO 8601 time. The app opens a row only if its `reviewURL` is your mind's approval page for that act, `https://<control-host>/secrets/approvals?digest=<64 lowercase hex characters>`. Decisions are made on that page with the member's passkey, and the facet's approvals route is read-only.
+`approvalInbox(itx, signatures)` returns `{ items, decided }`. Each item is `{ id, kind, title, recipients, heldAt, reviewURL }`. `kind` is `"email"`, `"action"` or `"signature"`, and `heldAt` is an ISO 8601 time. `signatures` is true when the phone can show signature requests, so leave them out otherwise. `decided` lists what was settled lately, as the same fields without `reviewURL` plus `outcome` (`"approved"` or `"rejected"`) and `decidedAt`. A phone that had a request open uses it to say how the request ended.
 
-## Optional Apple push setup
+The app opens an item only if its `reviewURL` is your mind's own page for it: `https://<control-host>/secrets/approvals?digest=<64 lowercase hex characters>` for a held act, or `https://<control-host>/statements/sign?draft=<id>` for a statement. The member signs each decision, with a passkey or with a key kept on the iPhone, and the facet's approvals route is read-only.
 
-The app in this repository displays replies inline. Its backend also supports APNs for clients that register task notifications or Live Activities. The following steps apply if you ship such a client.
+A statement opens natively, with the passkey prompt shown by iOS, only when the Apple association file on your control host names the signed app under `webcredentials`. The platform serves that file once your mind's deploy lists the app ID (`apple.appIds` in its stack config, as `<team-id>.<bundle-id>`). Until then a statement opens on the platform's signing page.
+
+## Apple push setup
+
+The app registers for one alert: something started to wait for the member. `updateIterateMobile` sends it when the platform records a held email or agent action, once to each registered phone, and the alert names the kind alone. For requests of your own, call `await itx.iterateMobile.waiting({ key, kind })` with `kind` set to `"confirm"` or `"signature"` and a `key` that names the request once. The backend also supports APNs for clients that register task notifications or Live Activities. The steps below install the key that any of these need.
 
 1. Enable Push Notifications for your own app ID, add its push entitlement to that client, and create an APNs key for the intended app and environment. Save the downloaded `.p8` outside your source checkouts. Use your Apple Developer team ID and the mind ID from your iOS setup. [Apple key creation](https://developer.apple.com/help/account/keys/create-a-private-key/) · [APNs provider authentication](https://developer.apple.com/documentation/usernotifications/establishing-a-token-based-connection-to-apns)
 2. Set `APNS_KEY_FILE`, `APPLE_TEAM_ID`, `ITERATE_CONTROL_HOST`, and `ITERATE_MIND_ID` in your shell. With Node.js 22 or later, run these commands from the iOS repository.

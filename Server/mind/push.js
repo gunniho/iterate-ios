@@ -26,7 +26,8 @@ export async function sendPush(itx, job) {
   const response = await itx.fetch(
     new Request(target.origin + "/3/device/" + job.token, {
       method: "POST",
-      redirect: "error",
+      // The runtime takes "follow" or "manual" alone. A redirect is then a refusal like any other status.
+      redirect: "manual",
       headers: {
         authorization:
           'bearer getSecret("' + target.secret + '", { field: "accessToken" })',
@@ -43,6 +44,8 @@ export async function sendPush(itx, job) {
   );
   if (response.status === 200) return "accepted";
   const answer = await response.json().catch(() => ({}));
+  // Apple's own word for a refusal, for whoever keeps a record of the send.
+  job.refused?.(response.status + " " + (typeof answer.reason === "string" ? answer.reason.slice(0, 60) : ""));
   if (
     response.status === 410 ||
     (response.status === 400 &&

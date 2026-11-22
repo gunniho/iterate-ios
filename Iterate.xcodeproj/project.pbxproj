@@ -29,6 +29,7 @@
 		20595528E7595F7BC8C51C45 /* NativeLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDE010553B6C0FC0B7D73FE9 /* NativeLinks.swift */; };
 		23CD214AE9FF38D7EE16D618 /* MindSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01F12A374F8143C6D4C93C86 /* MindSocket.swift */; };
 		260FA6BAF952FE149F9FF1F9 /* IterateCompanions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 963A2FF8B195F4396A2F2074 /* IterateCompanions.swift */; };
+		28A7F0B58372C4634B3AF974 /* ApprovalSigning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EA5F0BB8D83C71C1091F4D8 /* ApprovalSigning.swift */; };
 		28DF63FF2304F5683ECCDD6D /* YourMoveSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CC9E4A5DAA6B30CA35DC3ED /* YourMoveSnapshot.swift */; };
 		2970FF271CA93DFD2794B55A /* IterateScreenShare.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFF6B5FCF7E83CE106A52667 /* IterateScreenShare.swift */; };
 		2A70A219E7839DB557E542B9 /* AssistantCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DA895FAAEF093B1150DA789 /* AssistantCenter.swift */; };
@@ -300,6 +301,7 @@
 		743CE0DC89228E9720912B82 /* IteratePhotoPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IteratePhotoPicker.swift; sourceTree = "<group>"; };
 		75ABE507410658512EAFB21B /* RecentAgentsSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentAgentsSnapshot.swift; sourceTree = "<group>"; };
 		7DA895FAAEF093B1150DA789 /* AssistantCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantCenter.swift; sourceTree = "<group>"; };
+		7EA5F0BB8D83C71C1091F4D8 /* ApprovalSigning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalSigning.swift; sourceTree = "<group>"; };
 		812D5EFFC865903387820B1D /* ConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionTests.swift; sourceTree = "<group>"; };
 		85A4D0DD5689F1875278E850 /* AgentDirectory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDirectory.swift; sourceTree = "<group>"; };
 		8814C244D5E8BF92E2142659 /* RecentAgentsTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentAgentsTimeline.swift; sourceTree = "<group>"; };
@@ -584,6 +586,7 @@
 		9FCD6855CE16F8A9BA43E89A /* Native */ = {
 			isa = PBXGroup;
 			children = (
+				7EA5F0BB8D83C71C1091F4D8 /* ApprovalSigning.swift */,
 				FE39C899BB0CEE627750BFA3 /* ApprovalsView.swift */,
 				8A4E8F82DD8516FD23A807D4 /* AssistantHome.swift */,
 				FC17C2E12B32C908CC9783E9 /* IntegrationSettings.swift */,
@@ -1080,6 +1083,7 @@
 				558A1F761DED8BDFB8B16E86 /* AgentDirectory.swift in Sources */,
 				1AA2A3DE16F9DD991B22140F /* AgentsHome.swift in Sources */,
 				A946DB4B58B14C03DC85F83E /* Alarms.swift in Sources */,
+				28A7F0B58372C4634B3AF974 /* ApprovalSigning.swift in Sources */,
 				C47883FE54D9ED0503F4BC44 /* ApprovalsView.swift in Sources */,
 				2A70A219E7839DB557E542B9 /* AssistantCenter.swift in Sources */,
 				075482445004333E3A6CA41F /* AssistantHome.swift in Sources */,

@@ -65,6 +65,7 @@
 		6C79CA4389AD137851B3AB0A /* NavigationIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34FDAD68934C6EAD351A880F /* NavigationIntents.swift */; };
 		6C7BDFB10B93294E1538C36B /* NativeLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = A79667873B1277F4A03766D9 /* NativeLinks.swift */; };
 		6DA6892DA06DADCB5B0FA996 /* CaptureReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BBCF81C5BB5380F1816B427 /* CaptureReview.swift */; };
+		6E27A2BF569370BDA7690756 /* ApprovalSigning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C31718B62A71ED819536D4E /* ApprovalSigning.swift */; };
 		71A65E9CB1975364039101C8 /* PairedWidgetSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17A6192843E2F571F682FDD2 /* PairedWidgetSnapshotStore.swift */; };
 		735846FEE13FBA5C310BDB1D /* IterateApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19FCA1E0E573D54B0CF9CCDE /* IterateApp.swift */; };
 		766E914B0D2E0DC021B8D51C /* PairedWidgetSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17A6192843E2F571F682FDD2 /* PairedWidgetSnapshotStore.swift */; };
@@ -314,6 +315,7 @@
 		7FF291CAD40A200E02EA24C5 /* icon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = icon.png; sourceTree = "<group>"; };
 		805E0AA54FF1C2B3F40C14C3 /* YourMoveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YourMoveTests.swift; sourceTree = "<group>"; };
 		89C10493B87BAB2E64096F19 /* IntegrationSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationSettings.swift; sourceTree = "<group>"; };
+		8C31718B62A71ED819536D4E /* ApprovalSigning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalSigning.swift; sourceTree = "<group>"; };
 		8F5C3329372F9A42D8E9A017 /* NativeIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeIntegrationTests.swift; sourceTree = "<group>"; };
 		91A34C9C32A44ABC1391CFA8 /* IteratePhotoPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IteratePhotoPicker.swift; sourceTree = "<group>"; };
 		91DD27F25690B185C7A7A7AF /* IterateWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IterateWidgets.swift; sourceTree = "<group>"; };
@@ -374,6 +376,7 @@
 		03C71207B36932BC73B142BB /* Native */ = {
 			isa = PBXGroup;
 			children = (
+				8C31718B62A71ED819536D4E /* ApprovalSigning.swift */,
 				21D478C211593A0BA7FDA922 /* ApprovalsView.swift */,
 				D4ABEBC1B2C92113C44ECB54 /* AssistantHome.swift */,
 				89C10493B87BAB2E64096F19 /* IntegrationSettings.swift */,
@@ -976,6 +979,7 @@
 				9F5B7F75223786C41AB8F7B2 /* AgentDirectory.swift in Sources */,
 				537F4A82F562F25ADA726C34 /* AgentsHome.swift in Sources */,
 				1E42CFB0AE9C6EBDFD3BC59D /* Alarms.swift in Sources */,
+				6E27A2BF569370BDA7690756 /* ApprovalSigning.swift in Sources */,
 				F587201F501DAD0831DEDFC7 /* ApprovalsView.swift in Sources */,
 				CEA54110BA7421DBC6482238 /* AssistantCenter.swift in Sources */,
 				97D873CA15F4313C46CA241D /* AssistantHome.swift in Sources */,

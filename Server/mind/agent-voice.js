@@ -33,6 +33,7 @@ export async function openAgentVoice(itx, stamp, input, facet) {
       agentPath.slice(1).split("/").some(p => !p || p === "." || p === "..")) {
     throw new Error("Invalid chat or iPhone installation.");
   }
+  // An Assistant task belongs to the member who asked it. Nobody else calls its agent.
   const task = partsOfAgent(agentPath);
   if (task && task[0] !== await hash(actor)) throw new Error("Agent unavailable.");
   if (draftId !== undefined) {

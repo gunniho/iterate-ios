@@ -49,6 +49,8 @@
 	<string>Review selected calendar events for your briefing.</string>
 	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
 	<string>Add calendar events you create with Iterate.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Iterate uses Face ID to sign your approvals with this iPhone’s key.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Photograph an item you choose to save or ask about.</string>
 	<key>NSContactsUsageDescription</key>

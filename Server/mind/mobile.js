@@ -348,10 +348,10 @@ export async function agentTranscript(itx, input) {
 }
 
 export class MobileService {
-  constructor(storage, push, readPendingApprovals) {
+  constructor(storage, push, readApprovalInbox) {
     this.storage = storage;
     this.push = push;
-    this.readPendingApprovals = readPendingApprovals;
+    this.readApprovalInbox = readApprovalInbox;
     this.memory = new MemoryStore(storage);
   }
 
@@ -366,6 +366,7 @@ export class MobileService {
         command.path.startsWith("//")
       )
         fail(400, "Invalid path.");
+      // A path is read against the site alone. One that resolves elsewhere is refused.
       const origin = "https://" + deployment.apexHost;
       const url = new URL(command.path, origin);
       if (url.origin !== origin) fail(400, "Invalid path.");
@@ -395,7 +396,8 @@ export class MobileService {
       }
       if (resource === "approvals" && parts.length === 1) {
         if (command.method !== "GET") fail(405, "Review decisions require a member passkey.");
-        return { status: 200, body: { items: await this.readPendingApprovals(itx) } };
+        const { items, decided } = await this.readApprovalInbox(itx, url.searchParams.get("signatures") === "1");
+        return { status: 200, body: { items, decided } };
       }
       const owner = await hash(actor);
       let result;
@@ -404,13 +406,16 @@ export class MobileService {
         if (parts.length !== 1 && !summary) fail(404, "Unknown Your Move action.");
         if (command.method !== "GET") fail(405, "Your Move is read-only.");
         const [pending, questions] = await Promise.all([
-          this.readPendingApprovals(itx),
+          this.readApprovalInbox(itx, true),
           this.openQuestions(owner, summary),
         ]);
-        const mail = pending.filter(item => item.kind === "email");
+        const mail = pending.items.filter(item => item.kind === "email");
+        const signatures = pending.items.filter(item => item.kind === "signature");
         return { status: 200, body: summary
-          ? { approvalCount: mail.length, questionCount: questions }
-          : { approvals: mail.map(({ id, title, recipients, reviewURL }) => ({ id, subject: title, to: recipients, reviewURL })), questions } };
+          // Everything that waits for a decision: the phone lists it all on one screen.
+          ? { approvalCount: pending.items.length, questionCount: questions }
+          : { approvals: mail.map(({ id, title, recipients, reviewURL }) => ({ id, subject: title, to: recipients, reviewURL })),
+              signatures: signatures.map(({ id, title, reviewURL }) => ({ id, title, reviewURL })), questions } };
       }
       if (resource === "memories") {
         if (parts.length === 1 && command.method === "GET")
@@ -1174,6 +1179,53 @@ export class MobileService {
       });
     }
     return all;
+  }
+
+  // A request started to wait for a member: say so on every registered phone, once each. The
+  // alert names the kind alone. What is asked is read in the app, over the member's session.
+  async waiting(itx, note) {
+    const words = {
+      email: "An email is waiting for your approval.",
+      action: "An agent action is waiting for your approval.",
+      confirm: "An agent is asking for your yes.",
+      signature: "A statement is waiting for your signature.",
+    };
+    if (!note || !Object.hasOwn(words, note.kind) || typeof note.key !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(note.key)) return;
+    const devices = await this.storage.list({ prefix: "device:" });
+    // How the send went, for the record: counts and Apple's answers, no token and no member.
+    const outcome = { devices: devices.size, results: [] };
+    for (const [key, device] of devices) {
+      if (device.bundleID !== appTopic || !device.notificationToken) { outcome.results.push("no-token"); continue; }
+      const sentKey = "waiting-push:" + note.key + ":" + key.split(":").at(-1);
+      if (await this.storage.get(sentKey)) { outcome.results.push("already-sent"); continue; }
+      let result, detail = "";
+      try {
+        result = await this.push(itx, {
+          refused: (why) => { detail = " (" + why.trim() + ")"; },
+          type: "alert",
+          token: device.notificationToken,
+          environment: device.environment,
+          collapseId: "iterate-waiting-" + note.key.slice(0, 32),
+          payload: {
+            aps: { category: "ITERATE_WAITING", "thread-id": "your-move", sound: "default", alert: { title: "Iterate", body: words[note.kind] } },
+            waiting: note.kind,
+          },
+        });
+      } catch (e) {
+        result = "retry";
+        detail = " (threw: " + String(e?.message ?? e).slice(0, 120) + ")";
+      }
+      outcome.results.push(device.environment + ":" + result + detail);
+      if (result === "accepted") await this.storage.put(sentKey, Date.now());
+      if (result === "invalid") {
+        await this.storage.transaction(async (tx) => {
+          const now = await tx.get(key);
+          if (now?.generation === device.generation && now.notificationToken === device.notificationToken)
+            await tx.put(key, { ...now, notificationToken: null });
+        });
+      }
+    }
+    return outcome;
   }
 
   async tick(itx, owner, runID, actionID) {

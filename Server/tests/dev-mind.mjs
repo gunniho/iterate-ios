@@ -275,14 +275,22 @@ class Storage {
 }
 const origin = "http://127.0.0.1:" + port;
 const digest = (text) => createHash("sha256").update(text).digest("hex");
-const service = new MobileService(new Storage(), async () => "accepted", async () => {
+// The inbox as a mind's reader answers it: what waits, oldest first, and what was decided lately.
+// A statement to sign is listed only for a phone that asks for signatures.
+const service = new MobileService(new Storage(), async () => "accepted", async (_itx, signatures) => {
   await sleep(cost.approvals);
-  return [
+  const ago = (minutes) => new Date(Date.now() - minutes * 60e3).toISOString();
+  const items = [
     { id: 41, kind: "email", title: "Re: Friday schedule", recipients: ["ada@example.test"],
-      heldAt: new Date(Date.now() - 18 * 60e3).toISOString(), reviewURL: origin + "/secrets/approvals?digest=" + digest("one") },
+      heldAt: ago(18), reviewURL: origin + "/secrets/approvals?digest=" + digest("one") },
     { id: 42, kind: "action", title: "Release the feed reader", recipients: [],
-      heldAt: new Date(Date.now() - 4 * 60e3).toISOString(), reviewURL: origin + "/secrets/approvals?digest=" + digest("two") },
+      heldAt: ago(4), reviewURL: origin + "/secrets/approvals?digest=" + digest("two") },
   ];
+  if (signatures) items.push({ id: 43, kind: "signature", title: "Confirm the new page", recipients: [],
+    heldAt: ago(1), reviewURL: origin + "/statements/sign?draft=" + digest("three").slice(0, 22) });
+  const decided = [{ id: 40, kind: "email", title: "Re: Thursday", recipients: ["ada@example.test"],
+    heldAt: ago(60), outcome: "approved", decidedAt: ago(50) }];
+  return { items, decided };
 });
 const serviceItx = {
   cd: (path) => path === "/agents"
@@ -419,6 +427,7 @@ const server = http.createServer(async (request, response) => {
         { token_type: "bearer", access_token: "dev-" + randomUUID(), refresh_token: "dev-refresh", expires_in: 86400, scope: "iterate" });
     case "/oauth2/device":
     case "/secrets/approvals":
+    case "/statements/sign":
       response.writeHead(200, { "content-type": "text/html" });
       return response.end("<meta name=viewport content='width=device-width'><body style='font:17px system-ui;padding:2em'>Local dev mind. Nothing to approve here.");
     case "/dev/config": {
