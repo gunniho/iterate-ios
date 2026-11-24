@@ -4,6 +4,7 @@ import SwiftUI
 struct AgentConversationView: View {
     private let initialTitle: String
     private let pair: (() -> Void)?
+    private let startsCall: Bool
     let connection: MindConnection
     @State private var conversation: AgentConversation
     @Environment(\.scenePhase) private var scenePhase
@@ -17,18 +18,22 @@ struct AgentConversationView: View {
     @State private var dictation: AgentDictation?
     @State private var call: CallRequest?
     @State private var inputNotice: String?
-    private struct CallRequest: Identifiable { let id = UUID(); let member: String }
+    @State private var startedCall = false
+    private struct CallRequest: Identifiable { let id = UUID(); let member: String; let sharesScreen: Bool }
 
     init(agent: IterateAgent, connection: MindConnection) {
         initialTitle = agent.name
         pair = nil
+        startsCall = false
         self.connection = connection
         _conversation = State(initialValue: connection.conversations.conversation(for: agent.path))
     }
 
-    init(draft: AgentConversation, connection: MindConnection, pair: @escaping () -> Void) {
+    /// `startsCall` opens the call at once, for a new agent that was asked for by voice.
+    init(draft: AgentConversation, connection: MindConnection, startsCall: Bool = false, pair: @escaping () -> Void) {
         initialTitle = "New Agent"
         self.pair = pair
+        self.startsCall = startsCall
         self.connection = connection
         _conversation = State(initialValue: draft)
     }
@@ -45,7 +50,7 @@ struct AgentConversationView: View {
             else { transcript }
             composer
         }
-        .defaultFocus($composerFocused, conversation.isNewDraft)
+        .defaultFocus($composerFocused, conversation.isNewDraft && !startsCall)
         .background(canvas.ignoresSafeArea())
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
@@ -63,10 +68,17 @@ struct AgentConversationView: View {
             }
         }
         .sheet(item: $call, onDismiss: { composerFocused = true }) { request in
-            AgentCallView(conversation: conversation, connection: connection, member: request.member)
+            AgentCallView(conversation: conversation, connection: connection, member: request.member,
+                          sharesScreen: request.sharesScreen)
         }
         .onAppear {
-            if conversation.isNewDraft { composerFocused = true }
+            if conversation.isNewDraft, !startsCall { composerFocused = true }
+        }
+        // Who the phone is paired with decides between the call and the Connect screen, as the Call button does.
+        .task(id: connection.pairing) {
+            guard startsCall, !startedCall, connection.pairing != .checking else { return }
+            startedCall = true
+            startCall()
         }
         .task(id: observation) {
             if !conversation.isNewDraft { await conversation.open(on: activeLink, for: screen) }
@@ -94,14 +106,7 @@ struct AgentConversationView: View {
     }
 
     private var callButton: some View {
-        Button {
-            conversation.markInput()
-            dictation?.cancel()
-            if let member {
-                composerFocused = false
-                call = CallRequest(member: member)
-            } else if let pair { pair() }
-        } label: {
+        Button { startCall() } label: {
             HStack(spacing: 7) {
                 Image(systemName: "phone.fill")
                 Text("Call")
@@ -121,6 +126,15 @@ struct AgentConversationView: View {
         .accessibilityIdentifier("iterate.chat.call")
     }
 
+    private func startCall(sharingScreen: Bool = false) {
+        conversation.markInput()
+        dictation?.cancel()
+        if let member {
+            composerFocused = false
+            call = CallRequest(member: member, sharesScreen: sharingScreen)
+        } else if let pair { pair() }
+    }
+
     private struct ObservationKey: Equatable {
         let link: ObjectIdentifier?
         let retry: Int
@@ -137,7 +151,7 @@ struct AgentConversationView: View {
     private var transcript: some View {
         ScrollViewReader { scroll in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
+                LazyVStack(alignment: .leading, spacing: 10) {
                     if let floor = conversation.floor, floor > 0 {
                         Button("Load earlier messages") { Task { await conversation.loadEarlier() } }
                             .font(.subheadline)
@@ -148,6 +162,7 @@ struct AgentConversationView: View {
                         ChatMessageRow(message: message, agentName: title, email: email)
                     }
                     if let text = conversation.outgoingText { outgoingRow(text) }
+                    if conversation.showsTypingIndicator { AgentTypingBubble() }
                     Color.clear.frame(height: 1)
                         .id("bottom")
                         .onAppear { atBottom = true }
@@ -164,7 +179,8 @@ struct AgentConversationView: View {
                             Label("Couldn't load conversation", systemImage: "wifi.exclamationmark")
                         } description: { Text(issue) } actions: { Button("Retry", action: retryRead) }
                     } else { ProgressView("Loading conversation…") }
-                } else if conversation.messages.isEmpty, !conversation.isNewDraft, conversation.outgoingText == nil {
+                } else if conversation.messages.isEmpty, !conversation.isNewDraft, conversation.outgoingText == nil,
+                          !conversation.showsTypingIndicator {
                     ContentUnavailableView(conversation.floor == 0 ? "No messages yet" : "No recent messages",
                                            systemImage: "bubble.left.and.bubble.right")
                         .allowsHitTesting(false)
@@ -176,6 +192,9 @@ struct AgentConversationView: View {
             }
             .onChange(of: conversation.outgoingText, initial: true) { _, text in
                 if text != nil { scroll.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onChange(of: conversation.showsTypingIndicator) { _, typing in
+                if typing && atBottom { scroll.scrollTo("bottom", anchor: .bottom) }
             }
             .onChange(of: conversation.lastSent) { _, id in
                 if id != nil { scroll.scrollTo("bottom", anchor: .bottom) }
@@ -255,7 +274,11 @@ struct AgentConversationView: View {
             }
             HStack(alignment: .bottom, spacing: 0) {
                 if conversation.isNewDraft {
-                    IterateCaptureView(menuAction: { dictation?.cancel() })
+                    IterateCaptureView(menuAction: { dictation?.cancel() }, include: { words in
+                        inputNotice = nil
+                        conversation.include(words)
+                        composerFocused = true
+                    }, shareScreen: { startCall(sharingScreen: true) })
                 }
                 TextField(conversation.isNewDraft ? "Message a new agent" : "Message", text: Binding(
                     get: { conversation.draft },
@@ -273,10 +296,9 @@ struct AgentConversationView: View {
                         dictation?.cancel()
                         Task { await conversation.sendDraft(using: connection) }
                     } label: {
-                        Group {
-                            if conversation.sending { ProgressView() }
-                            else { Image(systemName: "arrow.up.circle.fill").font(.system(size: 28)) }
-                        }.frame(width: 44, height: 44)
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 28))
+                            .frame(width: 44, height: 44)
                     }
                     .disabled(conversation.sending || conversation.sendError != nil ||
                               (conversation.isNewDraft ? member == nil : !conversation.connected))
@@ -284,7 +306,7 @@ struct AgentConversationView: View {
                     .accessibilityIdentifier("iterate.chat.send")
                 }
             }
-            .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 14))
+            .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 22))
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 9)
@@ -376,7 +398,7 @@ private struct ChatMessageRow: View {
             }
             .textSelection(.enabled)
             .messageBubble(outgoing: message.role == .input)
-            if message.role == .agent { Spacer(minLength: 12) }
+            if message.role == .agent { Spacer(minLength: 32) }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(message.role == .agent ? agentName : (message.sender == email && email != nil ? "You" : (message.sender ?? "Message")))
@@ -385,12 +407,46 @@ private struct ChatMessageRow: View {
     }
 }
 
+private struct AgentTypingBubble: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        Group {
+            if reduceMotion || scenePhase != .active {
+                dots(highlight: nil)
+            } else {
+                PhaseAnimator([0, 1, 2, 3]) { phase in
+                    dots(highlight: phase == 3 ? nil : phase)
+                } animation: { _ in .easeInOut(duration: 0.22) }
+            }
+        }
+        .messageBubble(outgoing: false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Agent is typing")
+        .accessibilityIdentifier("iterate.chat.typing")
+    }
+
+    private func dots(highlight: Int?) -> some View {
+        HStack(spacing: 4) {
+            ForEach(0..<3) { index in
+                Circle()
+                    .fill(.secondary)
+                    .frame(width: 6, height: 6)
+                    .opacity(highlight == nil || highlight == index ? 1 : 0.48)
+            }
+        }
+        .frame(height: 16)
+    }
+}
+
 private extension View {
     func messageBubble(outgoing: Bool) -> some View {
-        padding(.horizontal, outgoing ? 13 : 0)
-            .padding(.vertical, outgoing ? 9 : 3)
+        padding(.horizontal, 13)
+            .padding(.vertical, 9)
             .background {
-                if outgoing { RoundedRectangle(cornerRadius: 17).fill(.tint.opacity(0.12)) }
+                if outgoing { RoundedRectangle(cornerRadius: 17).fill(.tint.opacity(0.13)) }
+                else { RoundedRectangle(cornerRadius: 17).fill(Color(uiColor: .secondarySystemFill)) }
             }
     }
 }

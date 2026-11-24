@@ -1,78 +1,7 @@
-import AVFoundation
 import AppIntents
 import CarPlay
 import Combine
-import MediaPlayer
-import Observation
 import UIKit
-
-@MainActor
-@Observable
-final class BriefingPlayer: NSObject, AVSpeechSynthesizerDelegate {
-    static let shared = BriefingPlayer()
-    private(set) var playing = false
-    private(set) var runID: UUID?
-    private let speech = AVSpeechSynthesizer()
-    private var remoteTargets: [(MPRemoteCommand, Any)] = []
-
-    override init() {
-        super.init()
-        speech.delegate = self
-    }
-
-    func read(_ run: IterateRun) throws {
-        guard let response = run.response, !response.isEmpty else {
-            throw AssistantIssue.invalidInput("There’s no written reply to read yet.")
-        }
-        stop()
-        let audio = AVAudioSession.sharedInstance()
-        try audio.setCategory(.playback, mode: .spokenAudio, options: [])
-        try audio.setActive(true)
-        let center = MPRemoteCommandCenter.shared()
-        remoteTargets = [
-            (center.pauseCommand, center.pauseCommand.addTarget { [weak self] _ in Task { @MainActor in self?.pause() }; return .success }),
-            (center.playCommand, center.playCommand.addTarget { [weak self] _ in Task { @MainActor in self?.resume() }; return .success }),
-            (center.stopCommand, center.stopCommand.addTarget { [weak self] _ in Task { @MainActor in self?.stop() }; return .success })
-        ]
-        runID = run.id
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = [MPMediaItemPropertyTitle: run.title,
-            MPMediaItemPropertyArtist: "Iterate", MPNowPlayingInfoPropertyPlaybackRate: 1]
-        let utterance = AVSpeechUtterance(string: response)
-        utterance.voice = AVSpeechSynthesisVoice(language: Locale.preferredLanguages.first)
-        playing = true
-        speech.speak(utterance)
-    }
-
-    func pause() {
-        guard speech.pauseSpeaking(at: .word) else { return }
-        playing = false
-        MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] = 0
-    }
-    func resume() {
-        guard speech.continueSpeaking() else { return }
-        playing = true
-        MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] = 1
-    }
-    func stop() {
-        guard runID != nil else { return }
-        speech.stopSpeaking(at: .immediate)
-        finish()
-    }
-    private func finish() {
-        for (command, token) in remoteTargets { command.removeTarget(token) }
-        remoteTargets.removeAll()
-        runID = nil
-        playing = false
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-    }
-    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        Task { @MainActor [weak self] in
-            guard let self, !speech.isSpeaking else { return }
-            finish()
-        }
-    }
-}
 
 @MainActor
 final class IterateCarScene: UIResponder, CPTemplateApplicationSceneDelegate {
@@ -120,7 +49,6 @@ final class IterateCarScene: UIResponder, CPTemplateApplicationSceneDelegate {
                         if !requested, mind.voice.phase == .ready {
                             requested = true
                             ownsCall = true
-                            BriefingPlayer.shared.stop()
                             mind.voice.start()
                         }
                         let state: String

@@ -2,6 +2,7 @@
 import { AgentArchiveError, archivedAgentPaths, setAgentArchived } from "./agent-archive.js";
 import { appTopic } from "./push.js";
 import { deployment } from "./settings.js";
+import { ATTENTION_SCHEDULE, ATTENTION_TICK, NOTHING, attentionPush, attentionState, attentionStep, oneLine } from "./attention.js";
 import { MemoryStore, MemoryError, noteText } from "./memory.js";
 export const MOBILE_RULE = "itx.iterateMobile";
 export const MOBILE_TARGET =
@@ -143,14 +144,22 @@ const runKey = (owner, runID) => "run:" + owner + ":" + runID;
 const questionPrefix = owner => "question:" + owner + ":";
 const needsReply = r => r.status === "needsInput" && Boolean(r.response?.trim());
 
+// Set in the transaction that opens or closes a question, so the lock screen's count follows it
+// even when the call that changed it stops before `settle`.
+const ATTENTION_DIRTY = "attention-dirty";
 async function saveRun(tx, owner, r) {
   await tx.put(runKey(owner, r.id), r);
   const questionKey = questionPrefix(owner) + r.id;
+  const asked = Boolean(await tx.get(questionKey));
   if (needsReply(r)) await tx.put(questionKey, r.id);
   else await tx.delete(questionKey);
+  if (asked !== needsReply(r)) await tx.put(ATTENTION_DIRTY, true);
 }
 const deviceKey = (owner, deviceID) => "device:" + owner + ":" + deviceID;
-const tokenFields = ["notificationToken", "pushToStartToken"];
+// `attentionStartToken` starts the attention activity (attention.js) on a phone that shows none.
+const tokenFields = ["notificationToken", "pushToStartToken", "attentionStartToken"];
+const attentionActivityKey = (owner, deviceID) => "attention-activity:" + owner + ":" + deviceID;
+const attentionSentKey = (owner, deviceID) => "attention-sent:" + owner + ":" + deviceID;
 const activityPrefix = (owner, runID) =>
   "activity:" + owner + ":" + runID + ":";
 const receiptKey = (owner, runID, action) =>
@@ -348,10 +357,13 @@ export async function agentTranscript(itx, input) {
 }
 
 export class MobileService {
-  constructor(storage, push, readApprovalInbox) {
+  // `readAttention(itx)` answers what needs every member, as counts (attention.js `NOTHING` has
+  // its shape). A member's own questions are counted here.
+  constructor(storage, push, readApprovalInbox, readAttention = async () => NOTHING) {
     this.storage = storage;
     this.push = push;
     this.readApprovalInbox = readApprovalInbox;
+    this.readAttention = readAttention;
     this.memory = new MemoryStore(storage);
   }
 
@@ -416,6 +428,19 @@ export class MobileService {
           ? { approvalCount: pending.items.length, questionCount: questions }
           : { approvals: mail.map(({ id, title, recipients, reviewURL }) => ({ id, subject: title, to: recipients, reviewURL })),
               signatures: signatures.map(({ id, title, reviewURL }) => ({ id, title, reviewURL })), questions } };
+      }
+      if (resource === "attention") {
+        if (parts.length === 1 && command.method === "GET") {
+          const [shared, questions] = await Promise.all([this.readAttention(itx), this.askedOf(owner)]);
+          // What the lock screen shows, and every urgent todo by its words, for Your move.
+          return { status: 200, body: {
+            ...attentionState(shared, questions), until: shared.until || 0, urgentTodos: shared.urgentTodos || [],
+            ...(shared.todoList && { todoList: shared.todoList }),
+          } };
+        }
+        if (parts.length === 2 && value === "activity" && command.method === "PUT")
+          return { status: 200, body: await this.attentionActivity(itx, owner, body) };
+        fail(404, "Unknown attention action.");
       }
       if (resource === "memories") {
         if (parts.length === 1 && command.method === "GET")
@@ -507,6 +532,11 @@ export class MobileService {
     const record = await this.storage.get(runKey(owner, runID));
     if (!record) fail(404, "Task not found.");
     return record;
+  }
+
+  // What an agent asked `owner` and waits on, the latest first, each as one line of its words.
+  async askedOf(owner) {
+    return (await this.openQuestions(owner, false)).map((asked) => oneLine(asked.question) || oneLine(asked.title) || "A question");
   }
 
   async openQuestions(owner, summary) {
@@ -737,6 +767,7 @@ export class MobileService {
       await tx.put(indexKey(owner, datestr, runID), runID);
     });
     await this.dispatch(itx, owner, runID);
+    await this.settle(itx);
     return publicRun(await this.run(owner, runID));
   }
 
@@ -795,6 +826,7 @@ export class MobileService {
       });
     }
     await this.dispatch(itx, owner, runID);
+    await this.settle(itx);
     return publicRun(await this.run(owner, runID));
   }
 
@@ -905,6 +937,7 @@ export class MobileService {
       offset = page.scannedThroughOffset;
     }
     await this.deliver(itx, owner, runID);
+    await this.settle(itx);
   }
 
   async device(owner, deviceID, method, raw) {
@@ -913,6 +946,8 @@ export class MobileService {
       await this.storage.transaction(async (tx) => {
         const current = await tx.get(key);
         if (current) await this.forgetDevice(tx, owner, deviceID, current);
+        await tx.delete(attentionActivityKey(owner, deviceID));
+        await tx.delete(attentionSentKey(owner, deviceID));
       });
       return { ok: true };
     }
@@ -1181,15 +1216,19 @@ export class MobileService {
     return all;
   }
 
-  // A request started to wait for a member: say so on every registered phone, once each. The
-  // alert names the kind alone. What is asked is read in the app, over the member's session.
+  // A request started to wait for a member: say so on every registered phone, once each. With
+  // `note.text`, one line of what is asked, the alert is titled by its kind and says that line.
+  // With none it names the kind alone. The whole request is read in the app.
   async waiting(itx, note) {
     const words = {
       email: "An email is waiting for your approval.",
       action: "An agent action is waiting for your approval.",
       confirm: "An agent is asking for your yes.",
       signature: "A statement is waiting for your signature.",
+      urgent: "An urgent todo needs you.",
     };
+    const titles = { email: "Email to approve", action: "Agent action to approve", confirm: "An agent asks for your yes", signature: "Statement to sign", urgent: "Urgent todo" };
+    const text = oneLine(note?.text, 140);
     if (!note || !Object.hasOwn(words, note.kind) || typeof note.key !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(note.key)) return;
     const devices = await this.storage.list({ prefix: "device:" });
     // How the send went, for the record: counts and Apple's answers, no token and no member.
@@ -1207,7 +1246,8 @@ export class MobileService {
           environment: device.environment,
           collapseId: "iterate-waiting-" + note.key.slice(0, 32),
           payload: {
-            aps: { category: "ITERATE_WAITING", "thread-id": "your-move", sound: "default", alert: { title: "Iterate", body: words[note.kind] } },
+            aps: { category: "ITERATE_WAITING", "thread-id": "your-move", sound: "default",
+              alert: text ? { title: titles[note.kind], body: text } : { title: "Iterate", body: words[note.kind] } },
             waiting: note.kind,
           },
         });
@@ -1226,6 +1266,115 @@ export class MobileService {
       }
     }
     return outcome;
+  }
+
+  // The phone says which token updates the attention activity it shows, or with `token: null`
+  // that it shows none. `dismissed` says the member took it away: the same counts do not bring
+  // it back.
+  async attentionActivity(itx, owner, body) {
+    const deviceID = id(body.deviceId);
+    const device = await this.storage.get(deviceKey(owner, deviceID));
+    if (device?.bundleID !== appTopic) fail(409, "Register this installation first.");
+    const value = body.token == null ? null : token(body.token);
+    const key = attentionActivityKey(owner, deviceID);
+    if (!value) {
+      const [shared, questions] = body.dismissed === true
+        ? await Promise.all([this.readAttention(itx), this.askedOf(owner)]) : [];
+      await this.storage.transaction(async (tx) => {
+        await tx.delete(key);
+        if (shared)
+          await tx.put(attentionSentKey(owner, deviceID), { content: JSON.stringify(attentionState(shared, questions)), mode: "dismissed", at: Date.now() });
+      });
+      return { ok: true };
+    }
+    await this.storage.transaction(async (tx) => {
+      const prior = await tx.get(key);
+      if (prior?.token !== value || prior.generation !== device.generation)
+        await tx.put(key, { token: value, generation: device.generation, startedAt: Date.now() });
+    });
+    await this.attention(itx, { only: deviceKey(owner, deviceID) });
+    return { ok: true };
+  }
+
+  // Runs `attention` when a question opened or closed since it last ran.
+  async settle(itx) {
+    if (!(await this.storage.get(ATTENTION_DIRTY))) return;
+    await this.storage.delete(ATTENTION_DIRTY);
+    await this.attention(itx);
+  }
+
+  // What needs each member changed, or may have: every phone that shows the attention activity,
+  // or can start it, is sent the counts as they are now, once for each change (attention.js
+  // `attentionStep`). Answers how the sends went, with no token and no member.
+  async attention(itx, { only } = {}) {
+    const devices = await this.storage.list({ prefix: only || "device:" });
+    const outcome = { devices: devices.size, results: [] };
+    let shared;
+    const questions = new Map();
+    for (const [key, device] of devices) {
+      const [, owner, deviceID] = key.split(":");
+      const activityKey = attentionActivityKey(owner, deviceID), sentKey = attentionSentKey(owner, deviceID);
+      let activity = await this.storage.get(activityKey);
+      if (activity?.generation !== device.generation) activity = null;
+      if (device.bundleID !== appTopic || (!activity && !device.attentionStartToken)) continue;
+      shared ??= await this.readAttention(itx);
+      if (!questions.has(owner)) questions.set(owner, await this.askedOf(owner));
+      const state = attentionState(shared, questions.get(owner));
+      // A token Apple refuses is forgotten, and the other way to reach the phone is tried once.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const now = Date.now();
+        const step = attentionStep(state, { sent: await this.storage.get(sentKey), activity, canStart: Boolean(device.attentionStartToken), now });
+        if (!step) { outcome.results.push("unchanged"); break; }
+        const starting = step.mode === "start";
+        const value = starting ? device.attentionStartToken : activity.token;
+        let result;
+        try {
+          result = await this.push(itx, {
+            type: "liveactivity",
+            token: value,
+            environment: device.environment,
+            collapseId: "iterate-attention",
+            payload: attentionPush(step.mode, state, { now, until: shared.until }),
+          });
+        } catch {
+          result = "retry";
+        }
+        outcome.results.push(device.environment + ":" + step.mode + ":" + result);
+        if (result === "accepted") {
+          await this.storage.transaction(async (tx) => {
+            await tx.put(sentKey, { content: step.content, mode: step.mode, at: now });
+            // An ended activity takes no more updates, and a started one reports its own token.
+            if (step.mode !== "update" && activity) await tx.delete(activityKey);
+          });
+          break;
+        }
+        if (result !== "invalid") break;
+        await this.storage.transaction(async (tx) => {
+          if (!starting) {
+            if ((await tx.get(activityKey))?.token === value) await tx.delete(activityKey);
+            return;
+          }
+          const latest = await tx.get(key);
+          if (latest?.generation === device.generation && latest.attentionStartToken === value)
+            await tx.put(key, { ...latest, attentionStartToken: null });
+        });
+        if (starting) break;
+        activity = null;
+      }
+    }
+    if (!only) await this.scheduleAttention(itx, shared);
+    return outcome;
+  }
+
+  // The counts fall by themselves when a request's day runs out: look again then.
+  async scheduleAttention(itx, shared) {
+    const until = shared?.until > Date.now() ? shared.until : 0;
+    const key = "attention-schedule";
+    if (((await this.storage.get(key)) || 0) === until) return;
+    if (until)
+      await itx.schedules.set({ key: ATTENTION_SCHEDULE, when: { at: new Date(until + 1000).toISOString() }, events: [{ type: ATTENTION_TICK, payload: {} }] });
+    else await itx.schedules.cancel(ATTENTION_SCHEDULE);
+    await this.storage.put(key, until);
   }
 
   async tick(itx, owner, runID, actionID) {

@@ -124,9 +124,10 @@ final class AssistantCenter {
         return try await post("/runs", body: body, expecting: requestID, requiredSession: requiredSession)
     }
 
+    nonisolated static let briefingPrompt = "Prepare my briefing. Summarize commitments, open tasks and decisions that need my attention."
+
     func briefing(context: String? = nil, requestID: UUID = UUID()) async throws -> IterateRun {
-        var body: [String: Any] = ["id": requestID.uuidString.lowercased(), "kind": "briefing",
-                                   "prompt": "Prepare my briefing. Summarize commitments, open tasks and decisions that need my attention."]
+        var body: [String: Any] = ["id": requestID.uuidString.lowercased(), "kind": "briefing", "prompt": Self.briefingPrompt]
         let relevant = [FocusContext.current, context].compactMap { $0 }.joined(separator: "\n")
         if !relevant.isEmpty { body["context"] = String(relevant.prefix(2_000)) }
         return try await post("/runs", body: body, expecting: requestID)

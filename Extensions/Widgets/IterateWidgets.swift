@@ -248,6 +248,7 @@ private struct OriginalWidgetBundle: WidgetBundle {
     var body: some Widget {
         IterateTodayWidget()
         YourMoveWidget()
+        IterateAttentionActivity()
     }
 }
 
@@ -256,6 +257,7 @@ private struct IterateWidgetBundle: WidgetBundle {
     var body: some Widget {
         IterateTodayWidget()
         YourMoveWidget()
+        IterateAttentionActivity()
         if #available(iOS 27, *) { RecentAgentsWidget() }
         IterateNewAgentControl()
         IterateTalkControl()

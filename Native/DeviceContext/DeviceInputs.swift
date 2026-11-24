@@ -1,9 +1,9 @@
+import Contacts
 import CoreLocation
 import HealthKit
 import HomeKit
 import MapKit
 import MusicKit
-import Observation
 
 struct DevicePlace: Sendable {
     let label: String
@@ -98,7 +98,7 @@ final class DeviceLocation: NSObject, @preconcurrency CLLocationManagerDelegate 
 }
 
 enum DeviceHealth {
-    static func steps(on day: Date) async throws -> String {
+    static func steps(on day: Date) async throws -> Int {
         guard HKHealthStore.isHealthDataAvailable() else { throw DeviceContextError("Health data is unavailable on this device.") }
         let start = Calendar.current.startOfDay(for: day)
         guard let following = Calendar.current.date(byAdding: .day, value: 1, to: start), start <= .now else {
@@ -113,54 +113,82 @@ enum DeviceHealth {
         guard let quantity = statistics?.sumQuantity() else {
             throw DeviceContextError("No readable step data for this day. You can review Iterate’s access in Health.")
         }
-        let count = Int(quantity.doubleValue(for: .count()).rounded())
-        return "\(day.formatted(date: .abbreviated, time: .omitted)) — \(count.formatted()) steps"
+        return Int(quantity.doubleValue(for: .count()).rounded())
     }
 }
 
-@MainActor @Observable
+struct DeviceContact: Sendable {
+    let name: String
+    let organization: String?
+    let phones: [String]
+    let emails: [String]
+}
+
+enum DeviceContacts {
+    static func find(_ name: String) async throws -> [DeviceContact] {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= 200 else { throw DeviceContextError("Give a name to look for.") }
+        switch CNContactStore.authorizationStatus(for: .contacts) {
+        case .notDetermined:
+            guard try await CNContactStore().requestAccess(for: .contacts) else { throw DeviceContextError("Contacts access was declined.") }
+        case .denied, .restricted: throw DeviceContextError("Allow Iterate access to Contacts in Settings.")
+        default: break
+        }
+        // The store reads from disk, so the search stays off the main thread.
+        return try await Task.detached {
+            let keys = [CNContactFormatter.descriptorForRequiredKeys(for: .fullName), CNContactOrganizationNameKey as CNKeyDescriptor,
+                        CNContactPhoneNumbersKey as CNKeyDescriptor, CNContactEmailAddressesKey as CNKeyDescriptor]
+            return try CNContactStore().unifiedContacts(matching: CNContact.predicateForContacts(matchingName: name), keysToFetch: keys)
+                .prefix(20).map { contact in
+                    let organization = contact.organizationName.isEmpty ? nil : contact.organizationName
+                    return DeviceContact(name: CNContactFormatter.string(from: contact, style: .fullName) ?? organization ?? "Contact",
+                                         organization: organization,
+                                         phones: contact.phoneNumbers.map { $0.value.stringValue },
+                                         emails: contact.emailAddresses.map { $0.value as String })
+                }
+        }.value
+    }
+}
+
+@MainActor
 final class DeviceHome: NSObject, @preconcurrency HMHomeManagerDelegate {
-    struct Scene: Identifiable {
+    static let shared = DeviceHome()
+
+    struct Scene {
         let home: HMHome
         let action: HMActionSet
-        var id: UUID { action.uniqueIdentifier }
-        var label: String { home.name + " · " + action.name }
     }
 
     private var manager: HMHomeManager?
-    private(set) var scenes = [Scene]()
-    private(set) var status = "Loading Home…"
+    private var loaded = false
 
-    func load() {
-        if let manager {
-            refresh(manager)
-            return
+    func homeManagerDidUpdateHomes(_ manager: HMHomeManager) { loaded = true }
+
+    /// The scenes that do something, once Home has told this iPhone what homes there are.
+    func scenes() async throws -> [Scene] {
+        let manager = manager ?? HMHomeManager()
+        if self.manager == nil {
+            manager.delegate = self
+            self.manager = manager
         }
-        manager = HMHomeManager()
-        manager?.delegate = self
+        let deadline = ContinuousClock.now.advanced(by: .seconds(12))
+        while !loaded, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(100)) }
+        let access = manager.authorizationStatus
+        if access.contains(.restricted) || (access.contains(.determined) && !access.contains(.authorized)) {
+            throw DeviceContextError("Allow Iterate access to Home in Settings.")
+        }
+        guard loaded else { throw DeviceContextError("Home did not answer on this iPhone. Try again.") }
+        return manager.homes.flatMap { home in home.actionSets.filter { !$0.actions.isEmpty }.map { Scene(home: home, action: $0) } }
     }
 
-    func homeManagerDidUpdateHomes(_ manager: HMHomeManager) { refresh(manager) }
-    func homeManager(_ manager: HMHomeManager, didUpdate status: HMHomeManagerAuthorizationStatus) { refresh(manager) }
-
-    private func refresh(_ manager: HMHomeManager) {
-        let auth = manager.authorizationStatus
-        if auth.contains(.restricted) || (auth.contains(.determined) && !auth.contains(.authorized)) {
-            scenes = []
-            status = "Allow Iterate access to Home in Settings to choose a scene."
-            return
-        }
-        scenes = manager.homes.flatMap { home in home.actionSets.filter { !$0.actions.isEmpty }.map { Scene(home: home, action: $0) } }
-            .sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
-        status = scenes.isEmpty ? "No configured Home scenes are available." : ""
-    }
-
-    func run(_ scene: Scene) async throws {
-        guard let manager, manager.authorizationStatus.contains(.authorized),
-              let current = scenes.first(where: { $0.id == scene.id }) else {
-            throw DeviceContextError("This Home scene is no longer available.")
-        }
-        try await current.home.executeActionSet(current.action)
+    /// Runs the one scene with this name, in the named home when several homes have it.
+    func run(scene name: String, home: String?) async throws -> Scene {
+        let same = { (a: String, b: String) in a.compare(b, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
+        let found = try await scenes().filter { same($0.action.name, name) && (home == nil || same($0.home.name, home!)) }
+        guard let scene = found.first else { throw DeviceContextError("No Home scene has that name.") }
+        guard found.count == 1 else { throw DeviceContextError("Several homes have a scene with that name. Name the home too.") }
+        try await scene.home.executeActionSet(scene.action)
+        return scene
     }
 }
 

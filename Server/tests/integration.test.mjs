@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createMobileService, installIterateMobile, mobileLink, updateIterateMobile } from "../mind/integration.js";
 import { agentPath, hash, MOBILE_RULE, MOBILE_TARGET, TICK } from "../mind/mobile.js";
+import { ATTENTION_TICK } from "../mind/attention.js";
 import { deployment } from "../mind/settings.js";
 
 test("only mobile-agent and scheduled reconciliation events reach the installed facet", async () => {
@@ -110,7 +111,8 @@ test("a copied backend serves only its configured apex and uses its own Dash and
 
 test("a held act alerts the phone from the platform's own record, and a mind supplies its inbox", async () => {
   const waited = [];
-  const itx = { iterateMobile: { waiting: async note => waited.push(note), reconcile: async () => {}, tick: async () => {} } };
+  let looked = 0;
+  const itx = { iterateMobile: { waiting: async note => waited.push(note), attention: async () => { looked++; }, reconcile: async () => {}, tick: async () => {} } };
   const digest = "ab".repeat(32);
   const held = { path: "/approvals", type: "events.iterate.com/approval/act-held", source: { platform: true },
     payload: { digest, act: "email.send" } };
@@ -124,7 +126,15 @@ test("a held act alerts the phone from the platform's own record, and a mind sup
   await updateIterateMobile(itx, { ...held, type: "events.iterate.com/approval/act-approved" });
   await updateIterateMobile(itx, { ...held, payload: { digest, act: "other.verb" } });
   await updateIterateMobile(itx, { ...held, payload: { digest: "short", act: "email.send" } });
-  assert.deepEqual(waited, [{ key: digest, kind: "email" }, { key: digest, kind: "action" }]);
+  assert.deepEqual(waited, [{ key: digest, kind: "email" }, { key: digest, kind: "action", text: "itx.calendar.send" }]);
+  // With the gate's own line for a mail, the alert says who it goes to and its subject.
+  await updateIterateMobile(itx, { ...held, payload: { digest, act: "email.send", summary: "Mail to ada@example.org: Friday" } });
+  assert.deepEqual(waited.at(-1), { key: digest, kind: "email", text: "To ada@example.org: Friday" });
+  // Every record of the gate may change what needs a member, as does a request's day running out.
+  assert.equal(looked, 6);
+  await updateIterateMobile(itx, { path: "/", type: ATTENTION_TICK, payload: {}, source: { schedule: "attention" } });
+  await updateIterateMobile(itx, { path: "/", type: ATTENTION_TICK, payload: {}, source: {} });
+  assert.equal(looked, 7);
 
   const member = { member: true, principal: { actor: "member-a" } };
   const read = { method: "GET", path: "/approvals?signatures=1" };
@@ -139,4 +149,30 @@ test("a held act alerts the phone from the platform's own record, and a mind sup
   assert.deepEqual((await supplied.request({}, member, { method: "GET", path: "/approvals" })).body.items, []);
   assert.deepEqual(asked, [true, false]);
   assert.equal((await supplied.request({}, member, { method: "POST", path: "/approvals" })).status, 405);
+});
+
+test("the lock screen counts what the inbox and the gate hold, or what a mind's own reader says", async () => {
+  const storage = { get: async () => undefined, put: async () => {}, list: async () => new Map(), transaction: async run => run(storage) };
+  const member = { member: true, principal: { actor: "member-a" } };
+  const read = { method: "GET", path: "/attention" };
+  const heldAt = "2026-01-01T00:00:00.000Z", at = Date.parse(heldAt);
+  const inbox = async () => ({ decided: [], items: [
+    { id: 2, kind: "signature", title: "Publish the notes", recipients: [], heldAt: "2026-01-02T00:00:00.000Z", reviewURL: "https://iterate.example.org/sign" },
+    { id: 1, kind: "email", title: "Friday", recipients: ["ada@example.org"], heldAt, reviewURL: "https://iterate.example.org/review" },
+  ] });
+  // A platform from before `approvals.waiting` throws: the inbox alone is counted.
+  const older = await createMobileService(storage, { approvalInbox: inbox }).request({}, member, read);
+  assert.deepEqual(older.body, { approvals: 1, signatures: 1, questions: 0, urgent: 0, since: at / 1000,
+    items: [{ kind: "approval", text: "Email to ada@example.org: Friday" }, { kind: "signature", text: "Publish the notes" }],
+    until: at + 24 * 60 * 60 * 1000, urgentTodos: [] });
+  const gate = { approvals: { waiting: async () => ({ acts: [], rules: [{ at: at - 1000, verb: "email.send" }],
+    requests: [{ at: at + 1000, until: at + 5000, summary: "GET /orders", secret: "shop" }] }) } };
+  const newer = await createMobileService(storage, { approvalInbox: inbox }).request(gate, member, read);
+  assert.deepEqual(newer.body.items.map(item => item.text), ["New rule for email.send", "Email to ada@example.org: Friday", "Request with shop: GET /orders"]);
+  assert.deepEqual([newer.body.approvals, newer.body.signatures, newer.body.until], [2, 2, at + 5000]);
+  assert.equal((await createMobileService(storage).request({}, member, read)).body.approvals, 0);
+  const own = { approvals: 0, signatures: 0, urgent: 1, since: at, until: 0, items: [{ kind: "urgent", text: "Renew the certificate" }],
+    urgentTodos: [{ id: 4, text: "Renew the certificate", project: "Ops" }] };
+  const supplied = await createMobileService(storage, { approvalInbox: inbox, attention: async () => own }).request({}, member, read);
+  assert.deepEqual([supplied.body.urgent, supplied.body.approvals, supplied.body.urgentTodos], [1, 0, own.urgentTodos]);
 });

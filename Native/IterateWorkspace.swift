@@ -15,7 +15,7 @@ struct IterateWindow: View {
 
 @MainActor
 struct IterateWorkspace: View {
-    private enum Screen: Hashable { case pair, assistant, capture, settings, yourMove, approvals, agent(String), newAgent(AgentConversation) }
+    private enum Screen: Hashable { case pair, capture, settings, yourMove, approvals, agent(String), newAgent(AgentConversation) }
     private struct BrowserPage: Identifiable { let id: URL }
 
     let connection: MindConnection
@@ -26,10 +26,10 @@ struct IterateWorkspace: View {
     @State private var captureMode: IterateCaptureMode = .library
     @State private var captureVisit = UUID()
     @State private var lockedPhotoID: UUID?
-    @State private var showBriefing = false
     @State private var browser: BrowserPage?
     @State private var message: String?
-    @State private var pendingRoute: NativeDestination?
+    /// The new agent that "Talk to Iterate" opened, which calls as soon as it is on screen.
+    @State private var calling: AgentConversation?
     @State private var waitingApprovals = 0
     @State private var lastYourMoveReload: (session: String, date: Date)?
 
@@ -44,13 +44,13 @@ struct IterateWorkspace: View {
         NavigationStack(path: $path) {
             AgentsHome(connection: connection, isVisible: path.isEmpty, connect: pair) { path.append(.agent($0.path)) }
                 .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { path = [.settings] } label: { Label("Settings", systemImage: "gearshape") }
+                    }
                     approvalsItem
                     ToolbarItem(placement: .topBarTrailing) {
-                        Menu {
-                            Button { path = [.assistant] } label: { Label("Assistant", systemImage: "waveform") }
-                            Button { path = [.settings] } label: { Label("Settings", systemImage: "gearshape") }
-                        } label: { Image(systemName: "ellipsis.circle") }
-                        .accessibilityLabel("Iterate actions")
+                        Button(action: newAgent) { Label("New Agent", systemImage: "plus") }
+                            .accessibilityIdentifier("iterate.agents.new")
                     }
                 }
                 .navigationDestination(for: Screen.self, destination: screen)
@@ -76,12 +76,10 @@ struct IterateWorkspace: View {
             if paired, path.last == .pair { path.removeLast() }
         }
         .onChange(of: connection.agentLink.map(ObjectIdentifier.init)) { _, link in
-            if link != nil {
-                if let pendingRoute { self.pendingRoute = nil; route(pendingRoute, startVoice: true) }
-            } else { IterateScreenShare.shared.stop() }
+            if link == nil { IterateScreenShare.shared.stop() }
         }
-        .task(id: scenePhase == .active && (path.last == .assistant || path.last == .capture)) {
-            if scenePhase == .active, path.last == .assistant || path.last == .capture { await refreshFocus() }
+        .task(id: scenePhase == .active && path.last == .capture) {
+            if scenePhase == .active, path.last == .capture { await refreshFocus() }
         }
         .task(id: scenePhase == .active) {
             if scenePhase == .active { await TaskInboxUpgrade.removeLocalInbox() }
@@ -101,6 +99,10 @@ struct IterateWorkspace: View {
         }
         .task(id: foregroundWidgetSession) {
             if let session = foregroundWidgetSession { await refreshYourMove(for: session) }
+        }
+        .task(id: attentionSession) {
+            // Only an app in front may start the activity itself. The mind's pushes keep it true after.
+            if let session = attentionSession { await AttentionLiveActivity.refresh(sessionID: session) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .iterateRouteChanged)) { _ in
             if let destination = NativeRouteBus.shared.take() { route(destination, startVoice: true) }
@@ -153,7 +155,7 @@ struct IterateWorkspace: View {
     @ViewBuilder private func screen(_ destination: Screen) -> some View {
         switch destination {
         case .newAgent(let draft):
-            AgentConversationView(draft: draft, connection: connection, pair: {
+            AgentConversationView(draft: draft, connection: connection, startsCall: calling === draft, pair: {
                 path.append(.pair)
                 connection.connect()
             }).id(draft)
@@ -188,10 +190,6 @@ struct IterateWorkspace: View {
             } else if connection.pairing == .checking {
                 ProgressView("Checking your connection…")
             } else { connectionScreen }
-        case .assistant:
-            if connection.hasSavedSession {
-                AssistantHome(connection: connection, showBriefing: $showBriefing)
-            } else { connectionScreen }
         case .capture:
             IterateCaptureView(initialMode: captureMode, lockedPhotoID: lockedPhotoID)
                 .navigationTitle("Capture")
@@ -218,8 +216,6 @@ struct IterateWorkspace: View {
     private func openAgents(_ target: String? = nil) {
         browser = nil
         message = nil
-        showBriefing = false
-        pendingRoute = nil
         path = target.map { [.agent($0)] } ?? []
     }
 
@@ -233,8 +229,6 @@ struct IterateWorkspace: View {
         withTransaction(transaction) {
             browser = nil
             message = nil
-            showBriefing = false
-            pendingRoute = nil
             path.append(.newAgent(draft))
         }
     }
@@ -254,21 +248,19 @@ struct IterateWorkspace: View {
         case .newAgent: newAgent()
         case .yourMove:
             browser = nil
-            pendingRoute = nil
             path = [.yourMove]
         case .capture: showCapture(.library)
         case .camera: showCapture(.camera)
         case .talk:
-            path = [.assistant]
-            if startVoice {
-                if connection.agentLink != nil { BriefingPlayer.shared.stop(); connection.voice.start() }
-                else { pendingRoute = .talk }
-            }
+            let draft = AgentConversation()
+            if startVoice { calling = draft }
+            openNewAgent(draft)
         case .web(let url): showWeb(url)
         case .briefing:
-            path = [.assistant]
-            if connection.hasSavedSession { showBriefing = true }
-            else { pendingRoute = .briefing }
+            // The request waits in the message field, for the person to send or change.
+            let draft = AgentConversation()
+            draft.draft = AssistantCenter.briefingPrompt
+            openNewAgent(draft)
         }
     }
 
@@ -284,6 +276,11 @@ struct IterateWorkspace: View {
     private var foregroundWidgetSession: String? {
         guard scenePhase == .active, connection.agentLink != nil,
               case .paired(let session) = connection.pairing else { return nil }
+        return session
+    }
+
+    private var attentionSession: String? {
+        guard scenePhase == .active, case .paired(let session) = connection.pairing else { return nil }
         return session
     }
 
@@ -313,12 +310,11 @@ struct IterateWorkspace: View {
         } else {
             path = []
         }
-        pendingRoute = nil
+        calling = nil
         browser = nil
         waitingApprovals = 0
-        BriefingPlayer.shared.stop()
         IterateScreenShare.shared.stop()
-        showBriefing = false
+        Task { await AttentionLiveActivity.clear() }
         lockedPhotoID = nil
         captureVisit = UUID()
         do { try IterateCaptureInbox.clear() } catch { message = error.localizedDescription }

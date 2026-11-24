@@ -6,14 +6,44 @@ struct AgentCallView: View {
     let conversation: AgentConversation
     let connection: MindConnection
     let member: String
+    /// Opens Apple's screen picker as soon as the call is live.
+    var sharesScreen = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @State private var destination: VoiceDestination?
     @State private var error: String?
     @State private var denied = false
     @State private var retry = 0
+    @State private var offeredScreen = false
 
     var body: some View {
+        // Screen sharing adds its controls and Iterate's answer, which can outgrow the half-height sheet.
+        GeometryReader { area in
+            ScrollView {
+                content
+                    .padding(24)
+                    .frame(maxWidth: .infinity, minHeight: area.size.height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+        .presentationDragIndicator(.visible)
+        .presentationDetents([.medium, .large])
+        .task(id: retry) { await begin() }
+        .onChange(of: connection.voice.phase) { _, phase in
+            if ownsCall, phase == .permission || phase == .dialing || phase == .live { conversation.voiceConnected() }
+        }
+        .onChange(of: live) { _, live in
+            guard live, sharesScreen, !offeredScreen else { return }
+            offeredScreen = true
+            IterateScreenShare.shared.start(voice: connection.voice)
+        }
+        .onChange(of: connection.pairing) { _, pairing in
+            if pairing != .paired(member) { dismiss() }
+        }
+        .onDisappear(perform: end)
+    }
+
+    private var content: some View {
         VStack(spacing: 20) {
             Image(systemName: live ? "waveform" : "phone.fill")
                 .font(.system(size: 34, weight: .medium))
@@ -39,19 +69,12 @@ struct AgentCallView: View {
                 .tint(live ? .red : .primary)
                 .accessibilityIdentifier("iterate.chat.endCall")
             }
+            // Sharing belongs to a live call, and ends with it.
+            if live, IterateScreenShare.shared.available {
+                IterateScreenShareControl(voice: connection.voice)
+                    .buttonStyle(.bordered)
+            }
         }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .presentationDragIndicator(.visible)
-        .presentationDetents([.medium, .large])
-        .task(id: retry) { await begin() }
-        .onChange(of: connection.voice.phase) { _, phase in
-            if ownsCall, phase == .permission || phase == .dialing || phase == .live { conversation.voiceConnected() }
-        }
-        .onChange(of: connection.pairing) { _, pairing in
-            if pairing != .paired(member) { dismiss() }
-        }
-        .onDisappear(perform: end)
     }
 
     private var ownsCall: Bool { destination != nil && connection.voice.destination == destination }
@@ -86,7 +109,6 @@ struct AgentCallView: View {
             }
             guard !connection.voice.isBusy else { error = "End the current voice call first."; return }
             let target = try conversation.voiceDestination(member: member, email: session.email)
-            BriefingPlayer.shared.stop()
             destination = target
             connection.voice.start(for: target)
         } catch {

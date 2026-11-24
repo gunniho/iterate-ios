@@ -5,6 +5,24 @@ struct MindRPCError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// The form values take on the socket: a list travels wrapped in a list, to tell it from an expression.
+enum MindWire {
+    /// What the mind sent, as plain JSON. A stub, a stream or bytes are refused.
+    static func plain(_ value: Any) throws -> Any {
+        if let fields = value as? [String: Any] { return try fields.mapValues(plain) }
+        guard let list = value as? [Any] else { return value }
+        if list.count == 1, let items = list[0] as? [Any] { return try items.map(plain) }
+        if list.count == 1, list[0] as? String == "undefined" { return NSNull() }
+        throw MindRPCError(message: "Send text, numbers, lists and objects only.")
+    }
+
+    static func wire(_ value: Any) -> Any {
+        if let fields = value as? [String: Any] { return fields.mapValues(wire) }
+        if let list = value as? [Any] { return [list.map(wire)] }
+        return value
+    }
+}
+
 /// The authenticated root, outstanding calls and subscription callbacks share one ordered socket.
 @MainActor
 final class MindSocket {
@@ -17,6 +35,12 @@ final class MindSocket {
     private var pending: [Int: CheckedContinuation<Data, Error>] = [:]
     private var callbacks: [Int: ([[String: Any]]) -> Void] = [:]
     private var peerResults: [Int: Bool] = [:]
+    /// What the mind may call on this iPhone: the names it spelled, and its arguments as plain JSON.
+    typealias Method = @MainActor (_ path: [String], _ arguments: [Any]) async throws -> Any
+    private var targets: [Int: Method] = [:]
+    private var peerWork: [Int: Task<Void, Never>] = [:]
+    private var peerAnswers: [Int: [Any]] = [:]
+    private var peerPulls: Set<Int> = []
     private var closed = false
 
     init(_ socket: URLSessionWebSocketTask) { self.socket = socket }
@@ -30,6 +54,11 @@ final class MindSocket {
         pending.removeAll()
         callbacks.removeAll()
         peerResults.removeAll()
+        targets.removeAll()
+        for work in peerWork.values { work.cancel() }
+        peerWork.removeAll()
+        peerAnswers.removeAll()
+        peerPulls.removeAll()
     }
 
     /// `opened` runs once requests can be queued behind the sign-in, before the mind has answered.
@@ -75,6 +104,16 @@ final class MindSocket {
     }
 
     func removeCallback(_ id: Int) { callbacks.removeValue(forKey: id) }
+
+    /// An object of this iPhone that the mind calls by name, and whose answers go back to it.
+    func exportTarget(_ method: @escaping Method) -> Int {
+        let id = nextCallback
+        nextCallback -= 1
+        targets[id] = method
+        return id
+    }
+
+    func removeTarget(_ id: Int) { targets.removeValue(forKey: id) }
 
     func call(target: Int = root, path: [String], arguments: [Any] = [],
               timeout: Duration = .seconds(15)) async throws -> Any {
@@ -155,14 +194,26 @@ final class MindSocket {
             case "push", "stream":
                 let id = nextPeerCall
                 nextPeerCall += 1
+                if let call = invocation(frame[1]) {
+                    answer(id, unasked: kind == "stream", call)
+                    continue
+                }
                 let handled = dispatch(frame[1])
                 if kind == "stream" { try reply(to: id, handled: handled) }
                 else { peerResults[id] = handled }
             case "pull":
                 guard let id = frame[1] as? Int else { throw ConnectionIssue.invalidResponse }
-                try reply(to: id, handled: peerResults[id] ?? false)
+                if peerWork[id] != nil { peerPulls.insert(id) }
+                else if let answer = peerAnswers[id] { try enqueue(answer) }
+                else { try reply(to: id, handled: peerResults[id] ?? false) }
             case "release":
-                if let id = frame[1] as? Int, id > 0 { peerResults.removeValue(forKey: id) }
+                if let id = frame[1] as? Int, id > 0 {
+                    peerResults.removeValue(forKey: id)
+                    peerAnswers.removeValue(forKey: id)
+                    peerPulls.remove(id)
+                    // Nobody waits for this answer any more.
+                    peerWork.removeValue(forKey: id)?.cancel()
+                }
             case "abort": throw ConnectionIssue.lostConnection
             default: throw ConnectionIssue.invalidResponse
             }
@@ -183,6 +234,49 @@ final class MindSocket {
               let events = wrapper[0] as? [[String: Any]] else { return false }
         callback(events)
         return true
+    }
+
+    private func invocation(_ expression: Any) -> (method: Method, path: [String], arguments: [Any])? {
+        guard let pipeline = expression as? [Any], pipeline.count == 4,
+              pipeline[0] as? String == "pipeline", let id = pipeline[1] as? Int,
+              let method = targets[id], let path = pipeline[2] as? [String],
+              let arguments = pipeline[3] as? [Any] else { return nil }
+        return (method, path, arguments)
+    }
+
+    /// How long a call from the mind may take here, a person's answer to iOS included.
+    static let answerLimit = Duration.seconds(120)
+
+    /// The answer waits for the mind to ask for it, unless the call was one that is answered unasked.
+    private func answer(_ id: Int, unasked: Bool, _ call: (method: Method, path: [String], arguments: [Any])) {
+        peerWork[id] = Task { [weak self] in
+            var frame: [Any]
+            do {
+                let value = try await call.method(call.path, try call.arguments.map(MindWire.plain))
+                frame = ["resolve", id, MindWire.wire(value)]
+                if !JSONSerialization.isValidJSONObject(frame) { frame = Self.rejection(id, "This iPhone could not write its answer.") }
+            } catch {
+                frame = Self.rejection(id, error.localizedDescription)
+            }
+            self?.deliver(frame, for: id, unasked: unasked)
+        }
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.answerLimit)
+            self?.deliver(Self.rejection(id, "This iPhone did not answer in time. Iterate may be waiting for the person there."),
+                          for: id, unasked: unasked)
+        }
+    }
+
+    /// The first answer to a call is the one sent. Work that is still running is told to stop.
+    private func deliver(_ frame: [Any], for id: Int, unasked: Bool) {
+        guard !closed, let work = peerWork.removeValue(forKey: id) else { return }
+        work.cancel()
+        if unasked || peerPulls.remove(id) != nil { try? enqueue(frame) }
+        else { peerAnswers[id] = frame }
+    }
+
+    private static func rejection(_ id: Int, _ message: String) -> [Any] {
+        ["reject", id, ["error", "Error", message]]
     }
 
     private func reply(to id: Int, handled: Bool) throws {

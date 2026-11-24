@@ -1,5 +1,4 @@
 import AppIntents
-import CoreLocation
 import EventKit
 import Foundation
 
@@ -16,16 +15,42 @@ struct DeviceAgendaEntry: Identifiable, Sendable {
     var text: String { details.isEmpty ? title : title + " — " + details }
 }
 
-enum DeviceAgendaKind: String { case calendar = "Calendar", reminders = "Reminders" }
+struct DeviceEvent: Sendable {
+    let title: String
+    let start: Date
+    let end: Date
+    let allDay: Bool
+    let location: String?
+}
+
+struct DeviceReminder: Sendable {
+    let id: String
+    let title: String
+    let list: String
+    let due: Date?
+    /// A reminder due on a day has no hour.
+    let timed: Bool
+}
 
 @MainActor
 final class DeviceAgenda {
     private let store = EKEventStore()
 
     func events(on day: Date) async throws -> [DeviceAgendaEntry] {
+        try await events(from: day, days: 1).map { event in
+            let time = event.allDay ? day.formatted(date: .abbreviated, time: .omitted) + ", all day" :
+                event.start.formatted(date: .abbreviated, time: .shortened) + " – " +
+                event.end.formatted(date: Calendar.current.isDate(event.start, inSameDayAs: event.end) ? .omitted : .abbreviated, time: .shortened)
+            let details = [time, event.location].compactMap { $0 }.joined(separator: " · ")
+            return DeviceAgendaEntry(id: UUID().uuidString, title: event.title, details: details)
+        }
+    }
+
+    /// The events of whole days, the first being the day of `day`.
+    func events(from day: Date, days: Int) async throws -> [DeviceEvent] {
         try await allowEvents(read: true)
         let start = Calendar.current.startOfDay(for: day)
-        guard let end = Calendar.current.date(byAdding: .day, value: 1, to: start) else {
+        guard days > 0, let end = Calendar.current.date(byAdding: .day, value: days, to: start) else {
             throw DeviceContextError("Choose another date.")
         }
         let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
@@ -33,16 +58,21 @@ final class DeviceAgenda {
             .sorted { $0.startDate < $1.startDate }
             .map { event in
                 let title = (event.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                let time = event.isAllDay ? day.formatted(date: .abbreviated, time: .omitted) + ", all day" :
-                    event.startDate.formatted(date: .abbreviated, time: .shortened) + " – " +
-                    event.endDate.formatted(date: Calendar.current.isDate(event.startDate, inSameDayAs: event.endDate) ? .omitted : .abbreviated, time: .shortened)
-                let details = [time, event.location].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
-                return DeviceAgendaEntry(id: event.calendarItemIdentifier + String(event.startDate.timeIntervalSince1970),
-                                        title: title.isEmpty ? "Untitled event" : title, details: details)
+                let location = event.location.flatMap { $0.isEmpty ? nil : $0 }
+                return DeviceEvent(title: title.isEmpty ? "Untitled event" : title, start: event.startDate, end: event.endDate,
+                                   allDay: event.isAllDay, location: location)
             }
     }
 
     func incompleteReminders() async throws -> [DeviceAgendaEntry] {
+        try await reminders().map { reminder in
+            let when = reminder.due.map { $0.formatted(date: .abbreviated, time: reminder.timed ? .shortened : .omitted) }
+            return .init(id: reminder.id, title: reminder.title, details: [reminder.list, when].compactMap { $0 }.joined(separator: " · "))
+        }
+    }
+
+    /// The reminders that are not done, the soonest due first.
+    func reminders() async throws -> [DeviceReminder] {
         try await allowReminders()
         let predicate = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: nil)
         return try await withCheckedThrowingContinuation { continuation in
@@ -51,18 +81,17 @@ final class DeviceAgenda {
                     continuation.resume(throwing: DeviceContextError("Reminders could not load this list."))
                     return
                 }
-                let entries = reminders.map { reminder -> (DeviceAgendaEntry, Date?) in
+                let found = reminders.map { reminder in
                     let components = reminder.dueDateComponents
-                    let due = components.flatMap { ($0.calendar ?? .current).date(from: $0) }
-                    let when = due.map { $0.formatted(date: .abbreviated, time: components?.hour == nil ? .omitted : .shortened) }
-                    let details = [reminder.calendar.title, when].compactMap { $0 }.joined(separator: " · ")
-                    return (.init(id: reminder.calendarItemIdentifier, title: reminder.title ?? "Untitled reminder", details: details), due)
+                    return DeviceReminder(id: reminder.calendarItemIdentifier, title: reminder.title ?? "Untitled reminder",
+                                          list: reminder.calendar.title,
+                                          due: components.flatMap { ($0.calendar ?? .current).date(from: $0) },
+                                          timed: components?.hour != nil)
                 }
-                let sorted = entries.sorted {
-                    if $0.1 != $1.1 { return ($0.1 ?? .distantFuture) < ($1.1 ?? .distantFuture) }
-                    return $0.0.title.localizedStandardCompare($1.0.title) == .orderedAscending
-                }
-                continuation.resume(returning: sorted.map(\.0))
+                continuation.resume(returning: found.sorted {
+                    if $0.due != $1.due { return ($0.due ?? .distantFuture) < ($1.due ?? .distantFuture) }
+                    return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+                })
             }
         }
     }
@@ -81,7 +110,7 @@ final class DeviceAgenda {
         return "\(title) — \(start.formatted(date: .abbreviated, time: .shortened)), \(calendar.title)"
     }
 
-    func createReminder(title: String, due: Date? = nil, place: DevicePlace? = nil, onArrival: Bool = true) async throws -> String {
+    func createReminder(title: String, due: Date? = nil) async throws -> String {
         let title = try validated(title)
         try await allowReminders()
         guard let calendar = store.defaultCalendarForNewReminders() else { throw DeviceContextError("Set up a Reminders list on this iPhone first.") }
@@ -95,19 +124,8 @@ final class DeviceAgenda {
             reminder.dueDateComponents = parts
             reminder.addAlarm(EKAlarm(absoluteDate: due))
         }
-        if let place {
-            let region = EKStructuredLocation(title: place.label)
-            region.geoLocation = CLLocation(latitude: place.latitude, longitude: place.longitude)
-            region.radius = 150
-            let alarm = EKAlarm()
-            alarm.structuredLocation = region
-            alarm.proximity = onArrival ? .enter : .leave
-            reminder.addAlarm(alarm)
-        }
         try store.save(reminder, commit: true)
-        let detail = place.map { (onArrival ? "Arriving at " : "Leaving ") + $0.label }
-            ?? due.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? calendar.title
-        return title + " — " + detail
+        return title + " — " + (due.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? calendar.title)
     }
 
     private func validated(_ value: String) throws -> String {

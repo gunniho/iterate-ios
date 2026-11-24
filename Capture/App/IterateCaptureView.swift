@@ -11,7 +11,12 @@ struct IterateCaptureView: View {
     let initialMode: IterateCaptureMode
     let lockedPhotoID: UUID?
     private let menuAction: (() -> Void)?
+    private let include: ((String) -> Void)?
+    private let shareScreen: (() -> Void)?
     @State private var showingMenu = false
+    @State private var choosingPlace = false
+    @State private var chosen: MenuChoice?
+    @State private var menuHeight: CGFloat = 520
     @State private var choosingPhoto = false
     @State private var photo: PhotosPickerItem?
     @State private var edit: CaptureDraft?
@@ -25,8 +30,15 @@ struct IterateCaptureView: View {
     @State private var launched = false
     @State private var reviewedLockedPhoto = false
 
-    init(initialMode: IterateCaptureMode = .library, lockedPhotoID: UUID? = nil, menuAction: (() -> Void)? = nil) {
+    private enum MenuChoice { case photo, file, camera, screen, place }
+
+    /// With `menuAction` this is the composer's plus button and its sheet of actions. `include` adds the
+    /// current place, whose words go to the composer, and `shareScreen` screen sharing, which needs a call.
+    init(initialMode: IterateCaptureMode = .library, lockedPhotoID: UUID? = nil, menuAction: (() -> Void)? = nil,
+         include: ((String) -> Void)? = nil, shareScreen: (() -> Void)? = nil) {
         self.menuAction = menuAction
+        self.include = include
+        self.shareScreen = shareScreen
         self.initialMode = initialMode
         self.lockedPhotoID = lockedPhotoID
     }
@@ -42,16 +54,14 @@ struct IterateCaptureView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .popover(isPresented: $showingMenu, arrowEdge: .bottom) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        captureActions
-                    }
-                    .labelStyle(.titleAndIcon)
-                    .buttonStyle(CaptureMenuRow())
-                    .fixedSize(horizontal: true, vertical: false)
-                    .padding(6)
-                    .presentationCompactAdaptation(.popover)
-                }
+                // What was chosen opens once this sheet has gone: two sheets cannot change places at once,
+                // and the field lets the keyboard go before a call's sheet comes up.
+                .sheet(isPresented: $showingMenu, onDismiss: {
+                    guard let choice = chosen else { return }
+                    chosen = nil
+                    perform(choice)
+                }) { menu }
+                .sheet(isPresented: $choosingPlace) { DevicePlaceView { include?($0) } }
                 .accessibilityLabel("Capture actions")
                 .accessibilityIdentifier("iterate.chat.capture")
                 .alert("Capture", isPresented: Binding(get: { issue != nil }, set: { if !$0 { issue = nil } })) {
@@ -132,24 +142,52 @@ struct IterateCaptureView: View {
         }
     }
 
-    private func selectAction() {
-        showingMenu = false
+    /// Every action at once, in a sheet as tall as its rows. It scrolls only where the screen is too short.
+    private var menu: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                captureActions
+                if shareScreen != nil, IterateScreenShare.shared.available {
+                    Button { choose(.screen) } label: { Label("Share screen", systemImage: "rectangle.on.rectangle") }
+                }
+                if include != nil {
+                    Button { choose(.place) } label: { Label("Current place", systemImage: "location") }
+                }
+            }
+            .labelStyle(CaptureMenuLabel())
+            .buttonStyle(CaptureMenuRow())
+            .padding(.horizontal, 10)
+            .padding(.top, 26)
+            .padding(.bottom, 8)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { menuHeight = $0 }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .presentationDetents([.height(menuHeight)])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func choose(_ choice: MenuChoice) {
         menuAction?()
+        if showingMenu {
+            chosen = choice
+            showingMenu = false
+        } else { perform(choice) }
+    }
+
+    private func perform(_ choice: MenuChoice) {
+        switch choice {
+        case .photo: choosingPhoto = true
+        case .file: choosingFile = true
+        case .camera: Task { await openCamera() }
+        case .screen: shareScreen?()
+        case .place: choosingPlace = true
+        }
     }
 
     @ViewBuilder private var captureActions: some View {
-        Button {
-            selectAction()
-            choosingPhoto = true
-        } label: { Label("Choose a photo", systemImage: "photo") }
-        Button {
-            selectAction()
-            choosingFile = true
-        } label: { Label("Choose a file", systemImage: "doc") }
-        Button {
-            selectAction()
-            Task { await openCamera() }
-        } label: { Label("Take a photo", systemImage: "camera") }
+        Button { choose(.photo) } label: { Label("Choose a photo", systemImage: "photo") }
+        Button { choose(.file) } label: { Label("Choose a file", systemImage: "doc") }
+        Button { choose(.camera) } label: { Label("Take a photo", systemImage: "camera") }
     }
 
     private var captureLibrary: some View {
@@ -231,6 +269,16 @@ struct IterateCaptureView: View {
             storedID = nil
             edit = CaptureDraft(attachment: file)
         } catch { issue = error.localizedDescription }
+    }
+}
+
+/// Symbols differ in width. One column for them keeps the titles in line.
+private struct CaptureMenuLabel: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 14) {
+            configuration.icon.frame(width: 28)
+            configuration.title
+        }
     }
 }
 

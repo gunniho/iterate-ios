@@ -323,12 +323,17 @@ final class ConversationFlowTests: DevMindTestCase {
         try await control("say", ["path": agents[0], "text": "Said while you watched"])
         try await wait("live reply") { chat.messages.last?.text == "Said while you watched" }
 
+        let beforeSend = try await wire().calls.count
         chat.draft = "A question from the test"
         await chat.sendDraft(using: connection)
         XCTAssertNil(chat.sendError)
         XCTAssertEqual(chat.draft, "")
         try await wait("own message") { chat.messages.contains { $0.text == "A question from the test" && $0.role == .input } }
+        try await wait("typing from the socket") { chat.showsTypingIndicator }
         try await wait("agent reply") { chat.messages.last?.text.hasPrefix("Understood: A question") == true }
+        XCTAssertFalse(chat.showsTypingIndicator)
+        let sendCalls = try await wire().calls.dropFirst(beforeSend)
+        XCTAssertFalse(sendCalls.contains { $0 == "readEvents" || $0.contains("transcript") }, "\(sendCalls)")
 
         // Earlier pages join without gaps or repeats, down to the first message.
         var floor = try XCTUnwrap(chat.floor)
@@ -402,6 +407,38 @@ final class ConversationFlowTests: DevMindTestCase {
         XCTAssertFalse(calls.contains { $0.contains("transcript") }, "\(calls)")
         chat.close()
         other.close()
+    }
+
+    func testTheMindCallsWhatThisIPhoneLends() async throws {
+        _ = try await reset()
+        _ = try await connected()
+        // The stand-in's member is dev@example.test.
+        let name = "itx.dev.iphone"
+        var lent: [String: Any] = [:]
+        let deadline = ContinuousClock.now + .seconds(10)
+        while lent[name] == nil, ContinuousClock.now < deadline {
+            lent = try await control("lent")["lent"] as? [String: Any] ?? [:]
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual((lent[name] as? String)?.contains("itx.dev.iphone.describe()"), true)
+
+        let described = try await control("call", ["match": name, "path": ["describe"], "args": []])
+        let actions = (described["result"] as? [String: Any])?["actions"] as? [[String: Any]]
+        XCTAssertEqual(actions?.compactMap { $0["call"] as? String }, PhoneActions.catalog.map(\.call))
+        // An action's refusal reaches the caller in its own words.
+        let refused = try await control("call", ["match": name, "path": ["contacts", "find"], "args": [[:] as [String: Any]]])
+        XCTAssertEqual(refused["error"] as? String, "Give name as text.")
+        // The phone lends no calendar.
+        let unknown = try await control("call", ["match": name, "path": ["calendar", "add"], "args": [["title": "Dentist"]]])
+        XCTAssertEqual((unknown["error"] as? String)?.contains("describe()"), true)
+        // Several calls at once each get their own answer.
+        let first = Task { try await self.control("call", ["match": name, "path": ["describe"], "args": []])["result"] != nil }
+        let second = Task {
+            try await self.control("call", ["match": name, "path": ["home", "run"], "args": [["home": "Cabin"]]])["error"] as? String
+        }
+        let (answered, refusal) = try await (first.value, second.value)
+        XCTAssertTrue(answered)
+        XCTAssertEqual(refusal, "Give scene as text.")
     }
 
     func testYourMoveReadsTheInboxAMindAnswers() async throws {

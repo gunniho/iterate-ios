@@ -103,7 +103,7 @@ final class AgentChatChannel {
         let options: [String: Any] = [
             "name": "iterate-ios-chat-" + UUID().uuidString.lowercased(),
             "afterOffset": offset,
-            "consumes": [[AgentChatMessage.received, AgentChatMessage.contextAdded, AgentChatMessage.replied]],
+            "consumes": [[AgentChatMessage.received, AgentChatMessage.contextAdded, AgentChatMessage.replied] + AgentTypingState.eventTypes],
             "target": ["export", id]
         ]
         let wire = try await socket.call(target: context, path: ["subscribe"], arguments: [options])

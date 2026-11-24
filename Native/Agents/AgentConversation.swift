@@ -26,6 +26,13 @@ final class AgentConversation: Hashable {
     var draft = "" {
         didSet { if draft != oldValue { markInput() } }
     }
+    /// Adds words chosen elsewhere, such as an event from Calendar, on a line of their own after what is written.
+    func include(_ words: String) {
+        let words = words.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return }
+        let written = draft.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
+        draft = written.isEmpty ? words : written + "\n" + words
+    }
     private(set) var messages: [AgentChatMessage] = []
     private(set) var floor: Int?
     private(set) var connected = false
@@ -34,6 +41,9 @@ final class AgentConversation: Hashable {
     private(set) var readError: String?
     private(set) var sendError: String?
     private(set) var lastSent: Int?
+    private var agentTyping = false
+    var showsTypingIndicator: Bool { connected && agentTyping }
+    @ObservationIgnored private var typing = AgentTypingState()
     @ObservationIgnored private var through: Int?
     @ObservationIgnored private var visit: UUID?
     @ObservationIgnored private var screens: Set<UUID> = []
@@ -123,6 +133,8 @@ final class AgentConversation: Hashable {
                 if held > latest {
                     // The agent's log was replaced. Read it again from its end.
                     through = nil; floor = nil; messages = []
+                    typing = AgentTypingState()
+                    agentTyping = false
                     await open(on: link)
                     return
                 }
@@ -163,6 +175,9 @@ final class AgentConversation: Hashable {
         try await live.follow(after: offset) { [weak self, weak live] events in
             guard let self, let live, self.channel === live else { return }
             self.merge(events.compactMap(AgentChatMessage.init(event:)))
+            for event in events { self.typing.apply(event) }
+            let isTyping = self.typing.isTyping
+            if self.agentTyping != isTyping { self.agentTyping = isTyping }
             if let offset = events.compactMap({ $0["offset"] as? Int }).max() {
                 self.through = max(self.through ?? 0, offset)
             }

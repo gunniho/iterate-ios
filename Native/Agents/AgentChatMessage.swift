@@ -76,3 +76,57 @@ struct AgentChatMessage: Identifiable, Equatable {
         return byOffset.values.sorted { $0.id < $1.id }
     }
 }
+
+/// Fold just enough of the ordered agent log to recognize a real model request. An intent for
+/// an older trigger is still durable, but the agent ignores it, so it must not leave dots stuck.
+struct AgentTypingState {
+    static let requested = "events.iterate.com/agent/llm-request-requested"
+    static let settled = "events.iterate.com/agent/llm-request-settled"
+    static let paused = "events.iterate.com/agent/paused"
+    static let inputGated = "events.iterate.com/agent/input-gated"
+    static let eventTypes = [requested, settled, paused, inputGated]
+
+    private var lastOffset = 0
+    private var trigger: Int?
+    private var request: Int?
+    private var replied = false
+    var isTyping: Bool { request != nil && !replied }
+
+    mutating func apply(_ event: [String: Any]) {
+        guard let offset = event["offset"] as? Int, offset > lastOffset,
+              let type = event["type"] as? String, let payload = event["payload"] as? [String: Any] else { return }
+        lastOffset = offset
+        switch type {
+        case AgentChatMessage.contextAdded:
+            let role = payload["role"] as? String
+            let policy = payload["llmRequestPolicy"] as? [String: Any]
+            if (role == "user" || role == "developer"), policy?["behaviour"] as? String != "dont-trigger-request" {
+                trigger = offset
+            }
+        case Self.requested:
+            guard request == nil, let trigger, payload["triggerOffset"] as? Int == trigger else { return }
+            self.trigger = nil
+            request = offset
+            replied = false
+        case Self.settled:
+            guard let request, payload["requestOffset"] as? Int == request else { return }
+            self.request = nil
+            // Failed attempts may be retried by the loop, using the failed request as their trigger.
+            if let result = payload["result"] as? [String: Any], result["status"] as? String == "failed",
+               result["loopLimit"] as? Bool != true {
+                trigger = request
+            }
+        case AgentChatMessage.replied:
+            if let request, payload["llmRequestOffset"] as? Int == request { replied = true }
+        case Self.inputGated:
+            if let trigger, payload["inputOffset"] as? Int == trigger, payload["wake"] as? Bool == false {
+                self.trigger = nil
+            }
+        case Self.paused:
+            trigger = nil
+            request = nil
+        default:
+            break
+        }
+    }
+}

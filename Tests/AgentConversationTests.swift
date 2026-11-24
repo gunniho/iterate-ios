@@ -2,6 +2,54 @@ import XCTest
 @testable import Iterate
 
 final class AgentConversationTests: XCTestCase {
+    func testTypingTracksOnlyTheCurrentRequestAndHidesWhenItReplies() {
+        var state = AgentTypingState()
+        state.apply(typingEvent(10, AgentChatMessage.contextAdded, ["role": "user"]))
+        state.apply(typingEvent(11, AgentChatMessage.contextAdded, ["role": "developer"]))
+        state.apply(typingEvent(12, AgentTypingState.requested, ["triggerOffset": 10]))
+        XCTAssertFalse(state.isTyping, "An obsolete intent does not start a model request")
+        state.apply(typingEvent(13, AgentTypingState.requested, ["triggerOffset": 11]))
+        XCTAssertTrue(state.isTyping)
+        state.apply(typingEvent(14, AgentTypingState.settled, ["requestOffset": 12, "result": ["status": "cancelled"]]))
+        state.apply(typingEvent(15, AgentChatMessage.replied, ["llmRequestOffset": 12, "message": "Older reply"]))
+        XCTAssertTrue(state.isTyping)
+        state.apply(typingEvent(16, AgentChatMessage.replied, ["llmRequestOffset": 13, "message": "Current reply"]))
+        XCTAssertFalse(state.isTyping)
+        state.apply(typingEvent(13, AgentTypingState.requested, ["triggerOffset": 11]))
+        XCTAssertFalse(state.isTyping, "Replayed delivery does not restart the dots")
+    }
+
+    func testTypingStopsOnFailureOrSilenceAndFollowsARealRetry() {
+        var state = AgentTypingState()
+        state.apply(typingEvent(20, AgentChatMessage.contextAdded, ["role": "user"]))
+        state.apply(typingEvent(21, AgentChatMessage.contextAdded, ["role": "user", "llmRequestPolicy": ["behaviour": "dont-trigger-request"]]))
+        state.apply(typingEvent(22, AgentTypingState.requested, ["triggerOffset": 20]))
+        XCTAssertTrue(state.isTyping)
+        state.apply(typingEvent(23, AgentTypingState.settled, ["requestOffset": 22, "result": ["status": "failed"]]))
+        XCTAssertFalse(state.isTyping)
+        state.apply(typingEvent(24, AgentTypingState.requested, ["triggerOffset": 22]))
+        XCTAssertTrue(state.isTyping)
+        state.apply(typingEvent(25, AgentTypingState.settled, ["requestOffset": 24, "result": ["status": "succeeded", "text": ""]]))
+        XCTAssertFalse(state.isTyping, "A turn can settle without a visible reply")
+    }
+
+    func testTypingStopsOnCancellationAndPause() {
+        var state = AgentTypingState()
+        state.apply(typingEvent(30, AgentChatMessage.contextAdded, ["role": "user"]))
+        state.apply(typingEvent(31, AgentTypingState.requested, ["triggerOffset": 30]))
+        state.apply(typingEvent(32, AgentChatMessage.contextAdded, ["role": "user"]))
+        state.apply(typingEvent(33, AgentTypingState.settled, ["requestOffset": 31, "result": ["status": "cancelled"]]))
+        XCTAssertFalse(state.isTyping)
+        state.apply(typingEvent(34, AgentTypingState.requested, ["triggerOffset": 32]))
+        XCTAssertTrue(state.isTyping)
+        state.apply(typingEvent(35, AgentTypingState.paused, ["reason": "loop-limit"]))
+        XCTAssertFalse(state.isTyping)
+    }
+
+    private func typingEvent(_ offset: Int, _ type: String, _ payload: [String: Any]) -> [String: Any] {
+        ["offset": offset, "type": type, "payload": payload]
+    }
+
     @MainActor
     func testConnectingActionOpensOneDraftAndLaterActionsOpenFreshDrafts() throws {
         let scene = IterateShortcutScene()
@@ -30,6 +78,20 @@ final class AgentConversationTests: XCTestCase {
         XCTAssertEqual(scene.requestedAgents.count, 2)
         XCTAssertEqual(first.draft, "Unsent thought")
         XCTAssertEqual(scene.requestedAgents.last?.draft, "")
+    }
+
+    @MainActor
+    func testIncludedWordsFollowTheDraftOnTheirOwnLine() {
+        let chat = AgentConversation()
+        chat.include("  Standup — 09:00\n")
+        XCTAssertEqual(chat.draft, "Standup — 09:00")
+        XCTAssertTrue(chat.receivedInput)
+
+        chat.draft = "Move this one \n"
+        chat.include("Ada Lovelace")
+        XCTAssertEqual(chat.draft, "Move this one\nAda Lovelace")
+        chat.include(" \n")
+        XCTAssertEqual(chat.draft, "Move this one\nAda Lovelace")
     }
 
     @MainActor

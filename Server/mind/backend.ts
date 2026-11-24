@@ -5,7 +5,7 @@ import { createMobileService, openAgentVoice, partsOfAgent } from "./integration
 export { installIterateMobile, updateIterateMobile, mobileLink } from "./integration.js";
 
 export class IterateMobile extends FacetDurableObject {
-  static override publicMethods = ["request", "openAgentVoice", "reconcile", "tick", "waiting"];
+  static override publicMethods = ["request", "openAgentVoice", "reconcile", "tick", "waiting", "attention"];
   #service = createMobileService(this.ctx.storage);
 
   async request(command: unknown) {
@@ -27,11 +27,21 @@ export class IterateMobile extends FacetDurableObject {
     await this.#service.sync(itx, pair[0], pair[1]);
   }
 
-  async waiting(note: { key: string; kind: string }) {
+  async waiting(note: { key: string; kind: string; text?: string }) {
     using itx = this.getItx();
     // A member's own call sends nothing. Each send leaves a line on `/apps/iterate-ios/pushes`.
     const outcome = this.onBehalfOf() ? { skipped: "called on a member's behalf" } : await this.#service.waiting(itx, note);
     if (outcome) await itx.cd("/apps/iterate-ios/pushes").append({ type: "iterate.mobile/waiting-push", payload: { kind: note?.kind, ...outcome } });
+  }
+
+  // What needs a member changed: the lock screen of each phone follows. A member's own call
+  // sends nothing. A send leaves a line on `/apps/iterate-ios/pushes`, with how it went alone.
+  async attention() {
+    if (this.onBehalfOf()) return;
+    using itx = this.getItx();
+    const outcome = await this.#service.attention(itx);
+    const sent = outcome.results.filter((result: string) => result !== "unchanged");
+    if (sent.length) await itx.cd("/apps/iterate-ios/pushes").append({ type: "iterate.mobile/attention-push", payload: { devices: outcome.devices, results: sent } });
   }
 
   async tick(owner: string, runID: string, actionID: string) {

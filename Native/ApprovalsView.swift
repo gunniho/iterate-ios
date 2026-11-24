@@ -129,6 +129,36 @@ struct ApprovalInbox: Decodable {
     }
 }
 
+/// A todo that cannot wait, as Your move lists it: its words and its project.
+struct UrgentTodoRow: View {
+    let todo: AttentionSummary.UrgentTodo
+    let linked: Bool
+    @ScaledMetric(relativeTo: .body) private var tile: CGFloat = 30
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: AttentionKind.urgent.symbol)
+                .font(.system(size: tile * 0.5, weight: .semibold)).foregroundStyle(.white)
+                .frame(width: tile, height: tile)
+                .background(.red, in: .rect(cornerRadius: tile * 0.24, style: .continuous))
+                .accessibilityLabel("Urgent todo")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: todo.text).foregroundStyle(.primary).lineLimit(3)
+                if !todo.project.isEmpty {
+                    Text(verbatim: todo.project).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+            if linked {
+                Image(systemName: "arrow.up.forward").font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary).accessibilityHidden(true)
+            }
+        }
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+    }
+}
+
 /// A platform review page, and the held act it was opened for. The whole inbox names no act.
 struct ApprovalReview: Identifiable, Equatable {
     let url: URL
@@ -225,6 +255,8 @@ struct ApprovalsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var items: [PendingApproval]?
     @State private var questions: [YourMoveQuestion] = []
+    @State private var urgent: [AttentionSummary.UrgentTodo] = []
+    @State private var todoList: URL?
     @State private var notice: String?
     @State private var issue: String?
     @State private var review: ApprovalReview?
@@ -251,6 +283,18 @@ struct ApprovalsView: View {
                     Button("Try again") { Task { await reload() } }
                 }
             }
+            if !urgent.isEmpty {
+                Section("Urgent") {
+                    ForEach(urgent) { todo in
+                        if let todoList {
+                            Link(destination: todoList) { UrgentTodoRow(todo: todo, linked: true) }
+                                .accessibilityHint("Opens the todo list.")
+                        } else {
+                            UrgentTodoRow(todo: todo, linked: false)
+                        }
+                    }
+                }
+            }
             if let items {
                 if !items.isEmpty {
                     Section("To approve") {
@@ -263,9 +307,9 @@ struct ApprovalsView: View {
                                                : "Review the exact request and approve or reject it with your passkey.")
                         }
                     }
-                } else if issue == nil, questions.isEmpty {
+                } else if issue == nil, questions.isEmpty, urgent.isEmpty {
                     ContentUnavailableView("You’re all caught up", systemImage: "checkmark.circle",
-                                           description: Text("No approvals, signature requests or questions are waiting for you."))
+                                           description: Text("No approvals, signature requests, questions or urgent todos are waiting for you."))
                         .listRowBackground(Color.clear)
                 }
                 if !questions.isEmpty {
@@ -312,6 +356,7 @@ struct ApprovalsView: View {
         }
         .animation(reduceMotion ? nil : .snappy, value: items?.map(\.id))
         .animation(reduceMotion ? nil : .snappy, value: questions.map(\.id))
+        .animation(reduceMotion ? nil : .snappy, value: urgent)
         .animation(reduceMotion ? nil : .snappy, value: issue)
         .privacySensitive()
         .navigationTitle("Your move")
@@ -423,11 +468,17 @@ struct ApprovalsView: View {
         do {
             async let inbox = ApprovalInbox.load(sessionID: sessionID)
             async let asked = YourMoveQuestions.load(sessionID: sessionID)
-            let (latest, open) = try await (inbox, asked)
+            // A mind from before the attention activity answers none: the lists above are whole without it.
+            async let needed = try? AttentionSummary.load(sessionID: sessionID)
+            let (latest, open, attention) = try await (inbox, asked, needed)
             guard !Task.isCancelled, requestID == id else { return }
             items = latest.items
             questions = open
+            urgent = attention?.urgentTodos ?? []
+            todoList = attention?.todoList
             issue = nil
+            // The Lock Screen counts what this screen lists, the moment a decision here changes it.
+            if let attention { await AttentionLiveActivity.show(attention) }
             ReviewLists.keep(latest.items, as: "approvals", for: sessionID)
             ReviewLists.keep(open, as: "questions", for: sessionID)
             // The widget counts what this screen lists.
@@ -442,6 +493,7 @@ struct ApprovalsView: View {
             if !paired || PairedSession.isAccessDenied(error) {
                 items = nil
                 questions = []
+                urgent = []
                 ReviewLists.keep(nil as [PendingApproval]?, as: "approvals", for: sessionID)
                 ReviewLists.keep(nil as [YourMoveQuestion]?, as: "questions", for: sessionID)
             } else if quiet, items != nil { return }

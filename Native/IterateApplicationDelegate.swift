@@ -18,6 +18,8 @@ final class IterateApplicationDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         IterateCompanions.shared.start()
         UNUserNotificationCenter.current().delegate = self
+        // Apple also starts the app in the background for an activity the mind pushed.
+        AttentionLiveActivity.observe()
         return true
     }
 
@@ -50,15 +52,16 @@ extension IterateApplicationDelegate: UNUserNotificationCenterDelegate {
     }
 }
 
-/// The alert that says something started to wait for this member. It names the kind alone: what
-/// is asked is read in Your move, over the member's session.
+/// The alert that says something started to wait for this member, in one line of what is asked.
+/// The whole request is read in Your move, over the member's session.
 @MainActor
 enum WaitingPush {
     nonisolated static let category = "ITERATE_WAITING"
     nonisolated static let logger = Logger(subsystem: Deployment.current.bundleID, category: "Push")
     private static let installationKey = "iterate.waitingPushInstallation"
 
-    private static var installation: String {
+    /// This installation's name at the mind, for every push registration it makes.
+    static var installation: String {
         if let saved = UserDefaults.standard.string(forKey: installationKey) { return saved }
         let made = UUID().uuidString.lowercased()
         UserDefaults.standard.set(made, forKey: installationKey)
@@ -80,17 +83,22 @@ enum WaitingPush {
     static func register(token: Data) async {
         do {
             guard let member = try CredentialStore().load()?.clientID else { return }
-            #if DEBUG
-            let environment = "sandbox"
-            #else
-            let environment = "production"
-            #endif
-            _ = try await AssistantCenter.shared.request("PUT", path: "/devices/" + installation, body: [
-                "environment": environment, "bundleID": Deployment.current.bundleID,
-                "notificationToken": token.map { String(format: "%02x", $0) }.joined(),
-            ], requiredSession: member)
+            try await register(["notificationToken": hex(token)], for: member)
         } catch {
             logger.error("Registering for alerts will retry (\((error as NSError).code, privacy: .public))")
         }
     }
+
+    /// Adds `tokens` to what the mind holds for this installation. A token it is not handed stays.
+    static func register(_ tokens: [String: Any], for member: String) async throws {
+        #if DEBUG
+        let environment = "sandbox"
+        #else
+        let environment = "production"
+        #endif
+        let body = tokens.merging(["environment": environment, "bundleID": Deployment.current.bundleID]) { _, fixed in fixed }
+        _ = try await AssistantCenter.shared.request("PUT", path: "/devices/" + installation, body: body, requiredSession: member)
+    }
+
+    nonisolated static func hex(_ token: Data) -> String { token.map { String(format: "%02x", $0) }.joined() }
 }

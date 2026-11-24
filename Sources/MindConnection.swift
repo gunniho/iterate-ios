@@ -51,6 +51,7 @@ final class MindConnection {
     #if !ITERATE_VOICE_ONLY
     let directory = AgentDirectory()
     let conversations = AgentConversations()
+    private let phone = PhoneLend()
     var agentLink: MindSocket? {
         if case .connected = phase { return socket }
         return nil
@@ -343,6 +344,7 @@ final class MindConnection {
                     self.phase = .connected(email: email)
                     #if !ITERATE_VOICE_ONLY
                     AssistantCenter.shared.foregroundSession = (credentials.clientID, link)
+                    self.phone.offer(on: link, email: email)
                     self.voice.attach(to: link, prepareImmediately: false)
                     #else
                     self.voice.attach(to: link)

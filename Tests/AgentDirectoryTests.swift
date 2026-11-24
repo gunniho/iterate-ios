@@ -3,6 +3,18 @@ import XCTest
 @testable import Iterate
 
 final class AgentDirectoryTests: XCTestCase {
+    func testCompactActivityAgeUsesWholeMinutesHoursAndDays() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let cases: [(TimeInterval, String)] = [
+            (-60, String(localized: "Now")), (59, String(localized: "Now")),
+            (60, "1m"), (1_259, "20m"), (3_599, "59m"), (3_600, "1h"),
+            (54_000, "15h"), (86_399, "23h"), (86_400, "1d"), (172_800, "2d")
+        ]
+        for (elapsed, label) in cases {
+            XCTAssertEqual(AgentActivityAge.compactLabel(for: now.addingTimeInterval(-elapsed), relativeTo: now), label)
+        }
+    }
+
     @MainActor
     func testCatalogUsesRecentActivityAndFallsBackToPathForUntitledAgents() throws {
         let wire = NativeMindTransport.encodeLiteral([

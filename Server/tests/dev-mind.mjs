@@ -164,7 +164,14 @@ function message(path, text, key) {
   if (!log.sent.has(key)) {
     const event = append(path, E + "message-received", { message: text, from: "/" }, { idempotencyKey: "agent-message:" + key, ...member });
     log.sent.set(key, event);
-    setTimeout(() => append(path, E + "web-message-sent", { message: "Understood: " + text.slice(0, 80) }), cost.reply);
+    const trigger = append(path, E + "context-added", { role: "user", content: text, messageOffset: event.offset });
+    const request = append(path, E + "llm-request-requested", { model: "stand-in", expiresAt: Date.now() + 30_000, triggerOffset: trigger.offset });
+    setTimeout(() => {
+      if (logs.get(path) !== log) return;
+      const message = "Understood: " + text.slice(0, 80);
+      append(path, E + "llm-request-settled", { requestOffset: request.offset, result: { status: "succeeded", text: message } });
+      append(path, E + "web-message-sent", { message, llmRequestOffset: request.offset });
+    }, cost.reply);
     const row = catalog.find((agent) => agent.path === path);
     if (row) row.lastActivityAt = new Date().toISOString();
   }
@@ -291,7 +298,17 @@ const service = new MobileService(new Storage(), async () => "accepted", async (
   const decided = [{ id: 40, kind: "email", title: "Re: Thursday", recipients: ["ada@example.test"],
     heldAt: ago(60), outcome: "approved", decidedAt: ago(50) }];
   return { items, decided };
-});
+}, async () => ({
+  // What needs the member, as the Lock Screen counts it: the inbox above, and one urgent todo.
+  approvals: 2, signatures: 1, urgent: 1, since: Date.now() - 18 * 60e3, until: Date.now() + 6 * 60 * 60e3,
+  items: [
+    { kind: "urgent", text: "Send the signed lease back today" },
+    { kind: "approval", text: "Email to ada@example.test: Re: Friday schedule" },
+    { kind: "approval", text: "Release the feed reader" },
+    { kind: "signature", text: "Confirm the new page" },
+  ],
+  urgentTodos: [{ id: 7, text: "Send the signed lease back today", project: "House" }],
+}));
 const serviceItx = {
   cd: (path) => path === "/agents"
     ? { facets: { get: () => ({ snapshot: async () => ({ state: { agents: Object.fromEntries(catalog.map((row) => [row.path, {}])), deleted: {} } }) }) } }
@@ -327,8 +344,25 @@ class Voice extends RpcTarget {
     return { path: "/voice/" + input.client, agentPath: "/agents/voice/" + input.client };
   }
 }
+// What a phone lends with `mind.provide`, as a mind keeps it: under its name, until its socket closes.
+const lends = new Map(); // "itx.dev.iphone" -> { stub, description, lend, session }
+class Lend extends RpcTarget {
+  constructor(match) { super(); this.match = match; this.ended = new Promise((resolve) => (this.end = resolve)); }
+  lendEnded() { return this.ended; }
+  [Symbol.dispose]() {
+    if (lends.get(this.match)?.lend === this) lends.delete(this.match);
+    this.end("was let go");
+  }
+}
 class Mind extends RpcTarget {
   constructor(session) { super(); this.session = session; }
+  async provide(match, target, options) {
+    this.session.stats.calls.push("provide");
+    lends.get(match)?.lend.end("was lent again");
+    const lend = new Lend(match);
+    lends.set(match, { stub: target.dup(), description: options?.description ?? "", lend, session: this.session });
+    return lend;
+  }
   async whoami() {
     this.session.stats.calls.push("whoami");
     await sleep(cost.whoami);
@@ -448,6 +482,20 @@ const server = http.createServer(async (request, response) => {
       const { path, text: words } = JSON.parse(text);
       return json(200, append(path, E + "web-message-sent", { message: words }));
     }
+    case "/dev/lent":
+      return json(200, { lent: Object.fromEntries([...lends].map(([match, lend]) => [match, lend.description])) });
+    case "/dev/call": { // what an agent's `itx.dev.iphone.contacts.find({…})` does: { match, path, args }
+      const { match, path, args } = JSON.parse(text);
+      const lend = lends.get(match);
+      if (!lend) return json(404, { error: "Nothing is lent as " + match + "." });
+      try {
+        let at = lend.stub;
+        for (const step of path) at = at[step];
+        return json(200, { result: await at(...(args ?? [])) });
+      } catch (error) {
+        return json(200, { error: String(error?.message ?? error) });
+      }
+    }
     case "/dev/drop":
       for (const session of sessions) session.socket.terminate();
       return json(200, { ok: true });
@@ -475,6 +523,7 @@ server.on("upgrade", (request, socket, head) => {
     new RpcSession(new PhoneLink(session), new Api(session));
     accepted.on("close", () => {
       for (const subscription of [...session.subscriptions]) subscription.close();
+      for (const [match, lend] of lends) if (lend.session === session) lends.delete(match);
       sessions.delete(session);
       totals.framesIn += session.stats.framesIn;
       totals.framesOut += session.stats.framesOut;

@@ -408,14 +408,31 @@ private struct AgentRow: View {
     }
 
     private func timestamp(_ date: Date) -> some View {
-        Text(date, format: .relative(presentation: .named)).font(.caption).foregroundStyle(.secondary)
+        Text(verbatim: AgentActivityAge.compactLabel(for: date))
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: true, vertical: false)
+            .accessibilityLabel(Text(date, format: .relative(presentation: .named)))
+    }
+}
+
+enum AgentActivityAge {
+    static func compactLabel(for date: Date, relativeTo now: Date = .now) -> String {
+        let elapsed = now.timeIntervalSince(date)
+        switch elapsed {
+        case ..<60: return String(localized: "Now")
+        case ..<3_600: return "\(Int(elapsed / 60))m"
+        case ..<86_400: return "\(Int(elapsed / 3_600))h"
+        default: return "\(Int(elapsed / 86_400))d"
+        }
     }
 }
 
 #Preview("Agent rows") {
     NavigationStack {
         List {
-            AgentRow(agent: .init(path: "/agents/assistant", name: "Personal assistant", lastActive: .now)) {}
+            AgentRow(agent: .init(path: "/agents/assistant", name: "Personal assistant", lastActive: .now.addingTimeInterval(-20 * 60))) {}
+            AgentRow(agent: .init(path: "/agents/travel", name: "Travel plans", lastActive: .now.addingTimeInterval(-15 * 3_600))) {}
             AgentRow(agent: .init(path: "/agents/reading", name: "Reading notes", lastActive: nil)) {}
         }.listStyle(.plain).navigationTitle("Agents")
     }
