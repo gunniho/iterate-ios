@@ -32,6 +32,8 @@ struct CaptureReview: View {
         }
         .disabled(busy)
         .interactiveDismissDisabled(busy)
+        .sensoryFeedback(trigger: answer?.id) { _, sent in sent == nil ? nil : .success }
+        .sensoryFeedback(trigger: issue) { _, problem in problem == nil ? nil : .error }
         .navigationTitle(answer == nil ? "Review capture" : "Capture")
         .navigationBarTitleDisplayMode(.inline)
         .task { if draft.attachment == nil && draft.text.isEmpty { editingMessage = true } }

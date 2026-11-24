@@ -19,6 +19,7 @@
 		9B1A61C5D7A7CA4B4D969174 /* Deployment.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF3F519E6A5AD0F230A678C5 /* Deployment.swift */; };
 		9E1FD2CE8078EF9169216A4E /* CallAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB5FBFA56A77421DE9C375B8 /* CallAudio.swift */; };
 		A81AAE57BC68012357AE9081 /* VoiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAB1579D4205AF4947F0D0B7 /* VoiceTests.swift */; };
+		B60D40D32417296FBFB46AC2 /* IterateMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE1CB24A12D1801A9F0564F3 /* IterateMotion.swift */; };
 		C42F747B50E61392BAD54A31 /* MindSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65DCF41B3EB1DF8F5FF675DC /* MindSocket.swift */; };
 		E80BD4E00B284818AD31015F /* CredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35C94BDC47A8D3B5ACC612E6 /* CredentialStore.swift */; };
 /* End PBXBuildFile section */
@@ -46,6 +47,7 @@
 		65DCF41B3EB1DF8F5FF675DC /* MindSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindSocket.swift; sourceTree = "<group>"; };
 		6FDC9E3DBDA557B8CA2655FE /* ConnectionScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionScreen.swift; sourceTree = "<group>"; };
 		A0FCF20373E95DDDC03DB2AD /* IterateTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = IterateTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AE1CB24A12D1801A9F0564F3 /* IterateMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IterateMotion.swift; sourceTree = "<group>"; };
 		B8BF5362FE6D9D6051E72961 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		BAB1579D4205AF4947F0D0B7 /* VoiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTests.swift; sourceTree = "<group>"; };
 		BB5FBFA56A77421DE9C375B8 /* CallAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallAudio.swift; sourceTree = "<group>"; };
@@ -90,11 +92,21 @@
 			path = ../Sources;
 			sourceTree = "<group>";
 		};
+		6193E2F0092FBB729EC50979 /* Native */ = {
+			isa = PBXGroup;
+			children = (
+				AE1CB24A12D1801A9F0564F3 /* IterateMotion.swift */,
+			);
+			name = Native;
+			path = ../Native;
+			sourceTree = "<group>";
+		};
 		90658CA40A48DBE4CC55D020 = {
 			isa = PBXGroup;
 			children = (
 				280C1E82892072E83BB42EC7 /* VoiceApp.swift */,
 				4D46EDB7661E1C4180300292 /* Configuration */,
+				6193E2F0092FBB729EC50979 /* Native */,
 				5F59AC5528F23CCC0095AEF8 /* Sources */,
 				C55FFB00E8ECF8D5ED11D77C /* Tests */,
 				0047573BE1F20694C74A5DAB /* Products */,
@@ -220,6 +232,7 @@
 				E80BD4E00B284818AD31015F /* CredentialStore.swift in Sources */,
 				9B1A61C5D7A7CA4B4D969174 /* Deployment.swift in Sources */,
 				0B4341E71310C54EAB213622 /* IterateClient.swift in Sources */,
+				B60D40D32417296FBFB46AC2 /* IterateMotion.swift in Sources */,
 				2DC6B46CEB8371F242DE9A71 /* LiveVoice.swift in Sources */,
 				70B1E52DC8A0B5B3D2477732 /* MindConnection.swift in Sources */,
 				C42F747B50E61392BAD54A31 /* MindSocket.swift in Sources */,

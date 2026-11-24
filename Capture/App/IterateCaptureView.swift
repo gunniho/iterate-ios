@@ -29,6 +29,7 @@ struct IterateCaptureView: View {
     @State private var issue: String?
     @State private var launched = false
     @State private var reviewedLockedPhoto = false
+    @ScaledMetric(relativeTo: .body) private var plusSymbol: CGFloat = 19
 
     private enum MenuChoice { case photo, file, camera, screen, place }
 
@@ -48,12 +49,11 @@ struct IterateCaptureView: View {
             if menuAction != nil {
                 Button { showingMenu.toggle() } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 19, weight: .medium))
+                        .font(.system(size: plusSymbol, weight: .medium))
                         .foregroundStyle(.secondary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
+                        .tapTarget()
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressFeedback())
                 // What was chosen opens once this sheet has gone: two sheets cannot change places at once,
                 // and the field lets the keyboard go before a call's sheet comes up.
                 .sheet(isPresented: $showingMenu, onDismiss: {

@@ -265,6 +265,7 @@ struct ApprovalsView: View {
     @State private var outcome: ApprovalResolution?
     @State private var outcomeShown = UUID()
     @State private var requestID = UUID()
+    @State private var repliesSent = 0
 
     init(sessionID: String) {
         self.sessionID = sessionID
@@ -316,13 +317,7 @@ struct ApprovalsView: View {
                     Section("Questions") {
                         ForEach(questions) { question in
                             YourMoveReply(question: question, sessionID: sessionID) { accepted in
-                                if accepted {
-                                    questions.removeAll { $0.id == question.id && $0.updatedAt == question.updatedAt }
-                                    notice = "Reply sent."
-                                } else {
-                                    notice = "This question changed. Check the latest questions before replying."
-                                }
-                                await reload()
+                                await answered(question, accepted: accepted)
                             }
                             .id(question.updatedAt)
                         }
@@ -354,24 +349,26 @@ struct ApprovalsView: View {
                 Text("Add a passkey on this iPhone once, and each review asks for \(unlock.name == "this iPhone" ? "it" : unlock.name) here. Adding it asks for a passkey you already have.")
             }
         }
-        .animation(reduceMotion ? nil : .snappy, value: items?.map(\.id))
-        .animation(reduceMotion ? nil : .snappy, value: questions.map(\.id))
-        .animation(reduceMotion ? nil : .snappy, value: urgent)
-        .animation(reduceMotion ? nil : .snappy, value: issue)
+        // Rows that come and go by themselves settle without a bounce.
+        .animation(reduceMotion ? nil : IterateMotion.standard, value: items?.map(\.id))
+        .animation(reduceMotion ? nil : IterateMotion.standard, value: questions.map(\.id))
+        .animation(reduceMotion ? nil : IterateMotion.standard, value: urgent)
+        .animation(reduceMotion ? nil : IterateMotion.standard, value: issue)
+        .sensoryFeedback(.success, trigger: repliesSent)
         .privacySensitive()
         .navigationTitle("Your move")
         .refreshable { await reload() }
         .safeAreaInset(edge: .bottom) {
             if let outcome {
                 ApprovalOutcomeNote(outcome: outcome)
-                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                    .transition(.floatingNote(reduceMotion: reduceMotion))
                     .task(id: outcomeShown) {
                         do { try await Task.sleep(for: .seconds(4)) } catch { return }
                         self.outcome = nil
                     }
             }
         }
-        .animation(.snappy, value: outcome)
+        .animation(IterateMotion.standard, value: outcome)
         .task(id: scenePhase) {
             // A decision made on another device should leave this list without a pull.
             var quiet = false
@@ -412,6 +409,17 @@ struct ApprovalsView: View {
     }
 
     private var unlock: (name: String, symbol: String) { ApprovalReviewLink.deviceUnlock }
+
+    private func answered(_ question: YourMoveQuestion, accepted: Bool) async {
+        if accepted {
+            questions.removeAll { $0.id == question.id && $0.updatedAt == question.updatedAt }
+            notice = "Reply sent."
+            repliesSent += 1
+        } else {
+            notice = "This question changed. Check the latest questions before replying."
+        }
+        await reload()
+    }
 
     /// A statement this iPhone asks the passkey for itself.
     private struct Signing: Identifiable {
@@ -516,16 +524,9 @@ struct ApprovalOutcomeNote: View {
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
-        .modifier(NoteSurface())
+        .modifier(FloatingNoteSurface())
         .padding(.horizontal, 16).padding(.bottom, 8)
         .accessibilityElement(children: .combine)
-    }
-
-    private struct NoteSurface: ViewModifier {
-        func body(content: Content) -> some View {
-            if #available(iOS 26, *) { content.glassEffect(.regular, in: .capsule) }
-            else { content.background(.regularMaterial, in: .capsule).shadow(color: .black.opacity(0.08), radius: 12, y: 4) }
-        }
     }
 }
 

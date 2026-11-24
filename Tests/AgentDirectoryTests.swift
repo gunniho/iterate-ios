@@ -159,6 +159,77 @@ final class AgentDirectoryTests: XCTestCase {
         XCTAssertLessThan(AgentArchiveKinematics.springVelocity(120, from: 80, to: 0), 0)
     }
 
+    func testArchiveRowFollowsTheFingerRightAndResistsItLeft() {
+        let width: CGFloat = 402
+        XCTAssertEqual(AgentArchiveKinematics.tracked(150, width: width, elastic: true), 150)
+        // Left of rest there is nothing to reveal: the row gives, and less the further it is pulled.
+        let near = AgentArchiveKinematics.tracked(-40, width: width, elastic: true)
+        let far = AgentArchiveKinematics.tracked(-240, width: width, elastic: true)
+        XCTAssertLessThan(near, 0)
+        XCTAssertGreaterThan(near, -40)
+        XCTAssertLessThan(far, near)
+        XCTAssertGreaterThan(far / -240, 0)
+        XCTAssertLessThan(far / -240, near / -40)
+        // Reduce Motion keeps the following and drops the stretch.
+        XCTAssertEqual(AgentArchiveKinematics.tracked(-240, width: width, elastic: false), 0)
+        XCTAssertEqual(AgentArchiveKinematics.commitDistance(width: width), width * 0.53, accuracy: 0.001)
+    }
+
+    func testAFlickIsCarriedOnAsAScrollViewDecelerates() {
+        // Apple's projection: a thousandth of the speed, times rate over one minus rate.
+        XCTAssertEqual(IterateMotion.projection(1000), 499, accuracy: 0.001)
+        XCTAssertEqual(IterateMotion.projection(1000, decelerationRate: 0.99), 99, accuracy: 0.001)
+        XCTAssertEqual(IterateMotion.projection(-600, decelerationRate: 0.99), -59.4, accuracy: 0.001)
+        XCTAssertEqual(IterateMotion.projection(0), 0)
+        // The archive swipe sits between the two, so a short throw clears the row and a nudge does not.
+        let carried = IterateMotion.projection(1000, decelerationRate: AgentArchiveKinematics.decelerationRate)
+        XCTAssertGreaterThan(carried, 99)
+        XCTAssertLessThan(carried, 499)
+        XCTAssertEqual(IterateMotion.rubberBand(0, dimension: 400), 0)
+        XCTAssertEqual(IterateMotion.rubberBand(100, dimension: 0), 0)
+        XCTAssertEqual(IterateMotion.rubberBand(-100, dimension: 400), -IterateMotion.rubberBand(100, dimension: 400), accuracy: 0.001)
+        // However far the pull, the stretch stays short of the view's own size.
+        XCTAssertLessThan(IterateMotion.rubberBand(100_000, dimension: 400), 400)
+    }
+
+    @MainActor
+    func testUndoTakesAnArchiveBackOnlyAfterTheMindAgrees() async throws {
+        let directory = AgentDirectory()
+        directory.selectSession(UUID().uuidString)
+        let path = "/agents/test"
+        try await directory.unarchive(path, perform: { XCTFail("An agent that was not archived was restored.") })
+        try await directory.archive(path) {}
+        XCTAssertEqual(directory.archivedPaths, [path])
+        do {
+            try await directory.unarchive(path, perform: { throw AssistantIssue.unavailable },
+                                          show: { _ in XCTFail("A failed restore put the row back.") })
+            XCTFail("Restore failure was swallowed.")
+        } catch AssistantIssue.unavailable {}
+        XCTAssertEqual(directory.archivedPaths, [path])
+        var shown = false
+        try await directory.unarchive(path, perform: {}, show: { change in
+            XCTAssertEqual(directory.archivedPaths, [path])
+            change()
+            shown = true
+        })
+        XCTAssertTrue(shown)
+        XCTAssertTrue(directory.archivedPaths.isEmpty)
+    }
+
+    @MainActor
+    func testUndoDoesNotAffectAReplacementPairing() async throws {
+        let directory = AgentDirectory()
+        directory.selectSession(UUID().uuidString)
+        let path = "/agents/test"
+        try await directory.archive(path) {}
+        do {
+            try await directory.unarchive(path, perform: { directory.selectSession(UUID().uuidString) },
+                                          show: { _ in XCTFail("A late restore changed another session.") })
+            XCTFail("A late restore affected another session.")
+        } catch is CancellationError {}
+        XCTAssertTrue(directory.archivedPaths.isEmpty)
+    }
+
     @MainActor
     func testArchiveWaitsForSuccessAndAllowsRetryAfterFailure() async throws {
         let directory = AgentDirectory()

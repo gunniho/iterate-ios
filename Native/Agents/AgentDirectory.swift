@@ -183,4 +183,22 @@ final class AgentDirectory {
         onConfirmed?()
         if let rows { try? await cache.save(rows, archivedPaths: archivedPaths, for: id) }
     }
+
+    /// Takes an archive back. `show` makes the change that returns the row, for the caller to animate.
+    func unarchive(_ path: String, perform: @MainActor () async throws -> Void,
+                   show: @MainActor (() -> Void) -> Void = { $0() }) async throws {
+        guard let id = sessionID else { throw AssistantIssue.unpaired }
+        guard archivedPaths.contains(path), !archivingPaths.contains(path) else { return }
+        let generation = sessionGeneration
+        do { try await perform() }
+        catch {
+            guard sessionGeneration == generation else { throw CancellationError() }
+            throw error
+        }
+        guard sessionGeneration == generation else { throw CancellationError() }
+        // A refresh that started before this write must not take the row away again.
+        archiveRevision = UUID()
+        show { archivedPaths.remove(path) }
+        if let rows { try? await cache.save(rows, archivedPaths: archivedPaths, for: id) }
+    }
 }

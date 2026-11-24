@@ -62,7 +62,8 @@ struct ConnectionScreen: View {
                             .accessibilityHidden(true)
                         Text(Deployment.current.apexHost)
                             .font(.system(size: titleSize, weight: .medium, design: .serif))
-                            .tracking(-2)
+                            // Tightened in proportion, so the word keeps its shape at every text size.
+                            .tracking(titleSize * -2 / 52)
                             .accessibilityAddTraits(.isHeader)
                         if case .approval(let code, _) = phase {
                             Text(code).font(.title3.monospaced().weight(.semibold))
@@ -104,6 +105,14 @@ struct ConnectionScreen: View {
         .onChange(of: phase) { _, next in
             if case .approval = next { return }
             signInPage = nil
+        }
+        .sensoryFeedback(trigger: phase) { previous, next in
+            // Pairing ends in one of two ways, and the hand is told which.
+            switch (previous, next) {
+            case (.connecting, .connected): .success
+            case (.preparing, .failed), (.approval, .failed), (.connecting, .failed): .error
+            default: nil
+            }
         }
     }
 
@@ -155,7 +164,7 @@ struct ConnectionScreen: View {
             .background(ink, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressFeedback())
     }
 
     private func secondary(_ title: String, perform: @escaping () -> Void) -> some View {
@@ -165,7 +174,7 @@ struct ConnectionScreen: View {
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressFeedback())
         .padding(.top, 3)
     }
 

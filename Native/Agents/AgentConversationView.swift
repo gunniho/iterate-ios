@@ -19,6 +19,10 @@ struct AgentConversationView: View {
     @State private var call: CallRequest?
     @State private var inputNotice: String?
     @State private var startedCall = false
+    // Symbols drawn at a size of their own grow with the reader's text size.
+    @ScaledMetric(relativeTo: .title2) private var backSymbol: CGFloat = 22
+    @ScaledMetric(relativeTo: .title) private var sendSymbol: CGFloat = 28
+    @ScaledMetric(relativeTo: .body) private var inputSymbol: CGFloat = 19
     private struct CallRequest: Identifiable { let id = UUID(); let member: String; let sharesScreen: Bool }
 
     init(agent: IterateAgent, connection: MindConnection) {
@@ -45,11 +49,12 @@ struct AgentConversationView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if conversation.isNewDraft, conversation.outgoingText == nil { Spacer(minLength: 0) }
+        ZStack {
+            if conversation.isNewDraft, conversation.outgoingText == nil { Color.clear }
             else { transcript }
-            composer
         }
+        // The transcript runs on under the composer, as it does under the title above.
+        .modifier(ComposerBar { composer })
         .defaultFocus($composerFocused, conversation.isNewDraft && !startsCall)
         .background(canvas.ignoresSafeArea())
         .navigationTitle(title)
@@ -90,17 +95,19 @@ struct AgentConversationView: View {
             dictation?.cancel()
             conversation.leave(screen)
         }
+        .sensoryFeedback(trigger: conversation.sendError) { _, failure in failure == nil ? nil : .error }
+        .sensoryFeedback(.impact(weight: .light), trigger: (dictation?.phase ?? .idle) == .idle)
     }
 
     private var canvas: Color { colors == .dark ? Color(uiColor: .systemBackground) : Color(red: 0.992, green: 0.98, blue: 0.976) }
     private var backButton: some View {
         Button { dismiss() } label: {
             Image(systemName: "chevron.backward")
-                .font(.system(size: 22, weight: .medium))
+                .font(.system(size: backSymbol, weight: .medium))
                 .frame(minWidth: 44, minHeight: 44, alignment: .leading)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressFeedback())
         .accessibilityLabel("Back")
         .accessibilityIdentifier("iterate.chat.back")
     }
@@ -120,7 +127,7 @@ struct AgentConversationView: View {
             .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressFeedback())
         .disabled(conversation.sending || connection.pairing == .checking)
         .accessibilityLabel("Call agent")
         .accessibilityIdentifier("iterate.chat.call")
@@ -176,8 +183,8 @@ struct AgentConversationView: View {
                 if conversation.floor == nil {
                     if let issue {
                         ContentUnavailableView {
-                            Label("Couldn't load conversation", systemImage: "wifi.exclamationmark")
-                        } description: { Text(issue) } actions: { Button("Retry", action: retryRead) }
+                            Label("Couldn’t load conversation", systemImage: "wifi.exclamationmark")
+                        } description: { Text(issue) } actions: { Button("Try again", action: retryRead) }
                     } else { ProgressView("Loading conversation…") }
                 } else if conversation.messages.isEmpty, !conversation.isNewDraft, conversation.outgoingText == nil,
                           !conversation.showsTypingIndicator {
@@ -226,15 +233,17 @@ struct AgentConversationView: View {
                 .accessibilityValue(text)
                 .accessibilityIdentifier("iterate.chat.pending")
             if let failure = conversation.sendError {
-                Text("Couldn't confirm delivery. \(failure)")
+                Text("Couldn’t confirm delivery. \(failure)")
                     .font(.footnote).foregroundStyle(.secondary)
-                HStack {
-                    Button("Retry") { Task { await conversation.retryFailedSend(using: connection) } }
+                HStack(spacing: 16) {
+                    Button("Try again") { Task { await conversation.retryFailedSend(using: connection) } }
+                        .tapTarget()
                         .accessibilityIdentifier("iterate.chat.retrySend")
                     Button(conversation.draft.isEmpty ? "Edit message" : "Dismiss") {
                         conversation.dismissFailedSend()
                         composerFocused = true
                     }
+                    .tapTarget()
                 }
             } else {
                 Text("Sending…").font(.caption).foregroundStyle(.secondary)
@@ -254,23 +263,27 @@ struct AgentConversationView: View {
                         Button("Settings") {
                             if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
                         }
+                        .tapTarget()
                     }
                     Button { dictation?.issue = nil } label: { Image(systemName: "xmark") }
+                        .tapTarget()
                         .accessibilityLabel("Dismiss dictation message")
                 }
+                .padding(.leading, 8)
             } else if let inputNotice {
-                Text(inputNotice).font(.footnote).foregroundStyle(.secondary)
+                Text(inputNotice).font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 8)
             } else if conversation.isNewDraft, !conversation.draft.isEmpty, connection.pairing == .unpaired, let pair {
-                Button("Connect to send", action: pair)
+                Button("Connect to send", action: pair).tapTarget().padding(.horizontal, 8)
             } else if conversation.floor != nil, !conversation.isNewDraft || !conversation.draft.isEmpty, let issue {
                 HStack {
                     Text(issue).font(.footnote).foregroundStyle(.secondary)
                     Spacer()
-                    Button("Retry", action: retryRead)
+                    Button("Try again", action: retryRead).tapTarget()
                 }
+                .padding(.horizontal, 8)
             } else if conversation.floor != nil, !conversation.draft.isEmpty,
                       conversation.isNewDraft ? activeLink == nil : !conversation.connected {
-                Text("Connecting…").font(.footnote).foregroundStyle(.secondary)
+                Text("Connecting…").font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 8)
             }
             HStack(alignment: .bottom, spacing: 0) {
                 if conversation.isNewDraft {
@@ -297,8 +310,8 @@ struct AgentConversationView: View {
                         Task { await conversation.sendDraft(using: connection) }
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 28))
-                            .frame(width: 44, height: 44)
+                            .font(.system(size: sendSymbol))
+                            .tapTarget()
                     }
                     .disabled(conversation.sending || conversation.sendError != nil ||
                               (conversation.isNewDraft ? member == nil : !conversation.connected))
@@ -306,7 +319,7 @@ struct AgentConversationView: View {
                     .accessibilityIdentifier("iterate.chat.send")
                 }
             }
-            .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 22))
+            .modifier(ComposerField())
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 9)
@@ -327,11 +340,12 @@ struct AgentConversationView: View {
             Group {
                 if phase == .finishing { ProgressView().controlSize(.small) }
                 else { Image(systemName: phase == .idle ? "mic" : "stop.circle.fill")
-                    .font(.system(size: 19, weight: .medium))
-                    .foregroundStyle(phase == .idle ? Color.secondary : .red) }
-            }.frame(width: 44, height: 44).contentShape(Rectangle())
+                    .font(.system(size: inputSymbol, weight: .medium))
+                    .foregroundStyle(phase == .idle ? Color.secondary : .red)
+                    .contentTransition(.symbolEffect(.replace)) }
+            }.tapTarget()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressFeedback())
         .disabled(phase == .finishing)
         .accessibilityLabel(phase == .idle ? "Dictate message" : "Stop dictation")
         .accessibilityHint("Turns spoken words into editable text.")
@@ -387,8 +401,7 @@ private struct ChatMessageRow: View {
                     Text(sender).font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 }
                 if !message.text.isEmpty {
-                    if message.role == .agent, let formatted = try? AttributedString(markdown: message.text,
-                        options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+                    if message.role == .agent, let formatted = MessageMarkdown.formatted(message.text) {
                         Text(formatted)
                     } else { Text(verbatim: message.text) }
                 }
@@ -404,6 +417,43 @@ private struct ChatMessageRow: View {
         .accessibilityLabel(message.role == .agent ? agentName : (message.sender == email && email != nil ? "You" : (message.sender ?? "Message")))
         .accessibilityValue(([message.text] + message.files).filter { !$0.isEmpty }.joined(separator: "\n"))
         .accessibilityIdentifier("iterate.chat.message")
+    }
+}
+
+/// An agent's reply with its inline Markdown read once, not on every pass of a scrolling list.
+@MainActor
+private enum MessageMarkdown {
+    private final class Parsed { let text: AttributedString?; init(_ text: AttributedString?) { self.text = text } }
+    private static let cache: NSCache<NSString, Parsed> = {
+        let cache = NSCache<NSString, Parsed>()
+        cache.countLimit = 400
+        return cache
+    }()
+
+    static func formatted(_ source: String) -> AttributedString? {
+        if let known = cache.object(forKey: source as NSString) { return known.text }
+        let parsed = try? AttributedString(markdown: source, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+        cache.setObject(Parsed(parsed), forKey: source as NSString)
+        return parsed
+    }
+}
+
+/// Holds the composer at the bottom as a floating layer, with the conversation scrolling beneath it.
+private struct ComposerBar<Bar: View>: ViewModifier {
+    @ViewBuilder let bar: () -> Bar
+
+    func body(content: Content) -> some View {
+        // From iOS 26 the scroll view softens what passes under a bar. Before, the bar's material does.
+        if #available(iOS 26, *) { content.safeAreaBar(edge: .bottom, spacing: 0) { bar() } }
+        else { content.safeAreaInset(edge: .bottom, spacing: 0) { bar().background(.bar) } }
+    }
+}
+
+/// The message field's surface: glass over the conversation, or a fill on the bar's material.
+private struct ComposerField: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) { content.glassEffect(.regular, in: .rect(cornerRadius: 22)) }
+        else { content.background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 22)) }
     }
 }
 
@@ -440,13 +490,24 @@ private struct AgentTypingBubble: View {
     }
 }
 
-private extension View {
-    func messageBubble(outgoing: Bool) -> some View {
-        padding(.horizontal, 13)
+private struct MessageBubble: ViewModifier {
+    let outgoing: Bool
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 17)
+        content
+            .padding(.horizontal, 13)
             .padding(.vertical, 9)
             .background {
-                if outgoing { RoundedRectangle(cornerRadius: 17).fill(.tint.opacity(0.13)) }
-                else { RoundedRectangle(cornerRadius: 17).fill(Color(uiColor: .secondarySystemFill)) }
+                if outgoing { shape.fill(.tint.opacity(contrast == .increased ? 0.2 : 0.13)) }
+                else { shape.fill(Color(uiColor: .secondarySystemFill)) }
             }
+            // A pale fill alone is a faint edge. Increase Contrast gets one that is drawn.
+            .overlay { if contrast == .increased { shape.strokeBorder(.primary.opacity(0.5), lineWidth: 1) } }
     }
+}
+
+private extension View {
+    func messageBubble(outgoing: Bool) -> some View { modifier(MessageBubble(outgoing: outgoing)) }
 }

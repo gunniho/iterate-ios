@@ -22,6 +22,7 @@ targets:
       - ../Configuration/Deployment.swift
       - ../Sources/Assets.xcassets
       - ../Sources/CallAudio.swift
+      - ../Native/IterateMotion.swift
       - ../Sources/ConnectionScreen.swift
       - ../Sources/CredentialStore.swift
       - ../Sources/IterateClient.swift

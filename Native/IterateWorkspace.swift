@@ -49,7 +49,8 @@ struct IterateWorkspace: View {
                     }
                     approvalsItem
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button(action: newAgent) { Label("New Agent", systemImage: "plus") }
+                        // A tap here pushes the screen in, the way it will leave.
+                        Button { openNewAgent(AgentConversation(), animated: true) } label: { Label("New Agent", systemImage: "plus") }
                             .accessibilityIdentifier("iterate.agents.new")
                     }
                 }
@@ -168,13 +169,13 @@ struct IterateWorkspace: View {
                 Group {
                     if case .failed(let reason) = connection.phase {
                         ContentUnavailableView {
-                            Label("Couldn't load agent", systemImage: "wifi.exclamationmark")
-                        } description: { Text(reason) } actions: { Button("Retry", action: connection.connect) }
+                            Label("Couldn’t load agent", systemImage: "wifi.exclamationmark")
+                        } description: { Text(reason) } actions: { Button("Try again", action: connection.connect) }
                     } else if let issue = connection.directory.refreshError, let link = connection.agentLink {
                         ContentUnavailableView {
-                            Label("Couldn't load agent", systemImage: "wifi.exclamationmark")
+                            Label("Couldn’t load agent", systemImage: "wifi.exclamationmark")
                         } description: { Text(issue) } actions: {
-                            Button("Retry") { Task { await connection.directory.refresh(on: link) } }
+                            Button("Try again") { Task { await connection.directory.refresh(on: link) } }
                         }
                     } else if connection.directory.rows == nil { ProgressView("Loading agent…") }
                     else { ContentUnavailableView("Agent unavailable", systemImage: "bubble.left.and.bubble.right") }
@@ -223,9 +224,13 @@ struct IterateWorkspace: View {
         openNewAgent(AgentConversation())
     }
 
-    private func openNewAgent(_ draft: AgentConversation) {
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
+    /// A button, a shortcut or a launch opens the composer already in place, ready for typing.
+    private func openNewAgent(_ draft: AgentConversation, animated: Bool = false) {
+        var transaction = Transaction()
+        if !animated {
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
         withTransaction(transaction) {
             browser = nil
             message = nil

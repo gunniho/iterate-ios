@@ -34,6 +34,7 @@
 		245DDB1FA229C38B8DB0B20E /* IterateShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AC05DA40214191F7052663C2 /* IterateShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		256386163424B7A352DAC116 /* YourMoveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200D9D45883EF919F610992B /* YourMoveView.swift */; };
 		27C6F4EEEBDAE996E5883594 /* MindConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3565E85C47746528BAA10D30 /* MindConnection.swift */; };
+		280298752DF64C6D81C8CD34 /* IterateMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1D38D1721B9E82B85ACF55 /* IterateMotion.swift */; };
 		291A252FE712C9A9654378DB /* AttentionActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB103A9E8CCAEE7AD7E32A12 /* AttentionActivity.swift */; };
 		29DFF979BFAA9EFBD75D10F7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9EFB3124884547741B466B21 /* Assets.xcassets */; };
 		30659CA9A7C7D3001155F344 /* IterateWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 537124D2A6326015FB05FC7E /* IterateWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -353,6 +354,7 @@
 		C4EA1C5874961B2DAA15E5C9 /* AgentDirectoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDirectoryTests.swift; sourceTree = "<group>"; };
 		C4FF88B23B4668355CF453D1 /* popup.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = popup.html; sourceTree = "<group>"; };
 		C599FCF9ED56D5AC71A92A9E /* WatchRelay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchRelay.swift; sourceTree = "<group>"; };
+		CD1D38D1721B9E82B85ACF55 /* IterateMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IterateMotion.swift; sourceTree = "<group>"; };
 		CD477A35A18848AA045CEE2E /* LockedCaptureImport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LockedCaptureImport.swift; sourceTree = "<group>"; };
 		CD7E755074392957E289F6A1 /* PhoneActionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneActionsTests.swift; sourceTree = "<group>"; };
 		D4EC8F23C62204937463C8D7 /* CredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialStore.swift; sourceTree = "<group>"; };
@@ -393,6 +395,7 @@
 				8C933866AD8E1340EEF2877A /* AttentionLiveActivity.swift */,
 				89C10493B87BAB2E64096F19 /* IntegrationSettings.swift */,
 				BF4D23C105848D0F9E9E3B9A /* IterateApplicationDelegate.swift */,
+				CD1D38D1721B9E82B85ACF55 /* IterateMotion.swift */,
 				1C252B54C1B4E8F498FFDC6C /* IterateWorkspace.swift */,
 				F1EA9B3CF3CE0F269C4C1B29 /* MediaAndCar.swift */,
 				7F54C3D122B5E52A35B29146 /* TaskInboxUpgrade.swift */,
@@ -1020,6 +1023,7 @@
 				F0E8B79C557A42AF44814FE9 /* IterateCaptureView.swift in Sources */,
 				B0A21CB216BA53386CB50979 /* IterateClient.swift in Sources */,
 				E93F91742AF93320980AEC8D /* IterateCompanions.swift in Sources */,
+				280298752DF64C6D81C8CD34 /* IterateMotion.swift in Sources */,
 				160891987860D4A7C5D090F6 /* IteratePhotoPicker.swift in Sources */,
 				AC7E940452FCF18496355875 /* IterateScreenShare.swift in Sources */,
 				64139071AAAAD4927539AD18 /* IterateWorkspace.swift in Sources */,

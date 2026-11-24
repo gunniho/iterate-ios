@@ -15,6 +15,8 @@ struct AgentCallView: View {
     @State private var denied = false
     @State private var retry = 0
     @State private var offeredScreen = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .largeTitle) private var symbolSize: CGFloat = 34
 
     var body: some View {
         // Screen sharing adds its controls and Iterate's answer, which can outgrow the half-height sheet.
@@ -45,10 +47,15 @@ struct AgentCallView: View {
 
     private var content: some View {
         VStack(spacing: 20) {
+            // The handset becomes a waveform that keeps moving for as long as the line is open.
             Image(systemName: live ? "waveform" : "phone.fill")
-                .font(.system(size: 34, weight: .medium))
+                .font(.system(size: symbolSize, weight: .medium))
+                .contentTransition(.symbolEffect(.replace))
+                .symbolEffect(.variableColor.iterative.dimInactiveLayers, isActive: live && !reduceMotion)
                 .accessibilityHidden(true)
             Text(status).font(.title2.weight(.semibold)).multilineTextAlignment(.center)
+                .contentTransition(.opacity)
+                .animation(IterateMotion.standard, value: status)
                 .accessibilityIdentifier("iterate.chat.callStatus")
             if let detail {
                 Text(detail).font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
