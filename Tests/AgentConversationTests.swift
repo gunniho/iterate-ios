@@ -2,6 +2,53 @@ import XCTest
 @testable import Iterate
 
 final class AgentConversationTests: XCTestCase {
+    func testMermaidPartsPreserveMarkdownAndIgnoreOtherFences() {
+        let hidden = "\u{60}\u{60}\u{60}\u{60}text\n\u{60}\u{60}\u{60}mermaid\nflowchart TD\nA --> B\n\u{60}\u{60}\u{60}\n\u{60}\u{60}\u{60}\u{60}"
+        let diagram = "~~~Mermaid\nflowchart TD\nA --> B\n~~~"
+        let unfinished = "\u{60}\u{60}\u{60}mermaid\n[not a link](https://example.invalid)"
+        XCTAssertEqual(AgentReplyPart.parse("**Before**\n" + hidden + "\n" + diagram + "\n**After**\n" + unfinished), [
+            .markdown("**Before**\n" + hidden), .diagram(source: "flowchart TD\nA --> B", fallback: diagram),
+            .markdown("**After**"), .literal(unfinished),
+        ])
+        let plain = "**Markdown**\r\nwith \u{60}mermaid\u{60} inline"
+        XCTAssertEqual(AgentReplyPart.parse(plain), [.markdown(plain)])
+    }
+
+    func testOnlyDeliveredAssistantRepliesCanShowDiagrams() throws {
+        let chart = "~~~mermaid\nflowchart TD\nA --> B\n~~~"
+        let reply = try XCTUnwrap(AgentChatMessage(event: typingEvent(1, AgentChatMessage.replied, ["message": chart])))
+        XCTAssertTrue(reply.allowsMermaid)
+        let user = try XCTUnwrap(AgentChatMessage(event: typingEvent(2, AgentChatMessage.received, ["message": chart])))
+        XCTAssertFalse(user.allowsMermaid)
+        XCTAssertNil(AgentChatMessage(event: typingEvent(3, "events.iterate.com/agent/llm-response-frame", ["responseDelta": chart])))
+    }
+
+    @MainActor
+    func testMermaidRendersRepresentativeMailFlowToBitmapAndFallsBackOnFailure() async throws {
+        let renderer = AgentMermaidRenderer()
+        let chart = """
+            flowchart TD
+              A["Incoming email"] --> B{"In rollout scope?<br/>Use recipient and arrival time"}
+              B -->|No| R["Normal mail routing"]
+              B -->|Yes| S["Screen a bounded, redacted subject<br/>Keep the result in member-only Mail"]
+              S --> V{"Screened?"}
+              V -->|Yes| R
+              V -->|Pending, flagged, or unavailable| I["Stays in Mail · no agent routing"]
+            """
+        let rendered = await renderer.render(chart, dark: false)
+        let image = try XCTUnwrap(rendered)
+        XCTAssertGreaterThan(image.size.width, 100)
+        XCTAssertGreaterThan(image.size.height, 100)
+        XCTAssertNotNil(image.cgImage)
+        let invalid = await renderer.render("flowchart TD\nA-->[", dark: false)
+        XCTAssertNil(invalid)
+        let override = await renderer.render("---\nconfig:\n  securityLevel: loose\n---\n" + chart, dark: false)
+        XCTAssertNil(override)
+        let safe = await renderer.render("flowchart TD\nA[\"<img src=https://example.invalid/chart-fetch>\"] --> B[Mail]", dark: true)
+        XCTAssertNotNil(safe?.cgImage, "Chart markup must not expose an interactive view")
+    }
+
+
     func testTypingTracksOnlyTheCurrentRequestAndHidesWhenItReplies() {
         var state = AgentTypingState()
         state.apply(typingEvent(10, AgentChatMessage.contextAdded, ["role": "user"]))
@@ -139,6 +186,25 @@ final class AgentConversationTests: XCTestCase {
         let reference = try JSONSerialization.jsonObject(with: Data(expected.utf8))
         XCTAssertEqual(try JSONSerialization.data(withJSONObject: expression, options: .sortedKeys),
                        try JSONSerialization.data(withJSONObject: reference, options: .sortedKeys))
+    }
+
+    @MainActor
+    func testDraftPhotosKeepTheirOrderAndCanBeRemoved() throws {
+        let conversation = AgentConversation()
+        let photos = try (1...12).map {
+            try CapturedFile(name: "Photo \($0).jpg", contentType: "image/jpeg", data: Data([UInt8($0)]))
+        }
+        XCTAssertFalse(conversation.hasDraftContent)
+        conversation.addDraftPhotos(photos)
+        XCTAssertTrue(conversation.receivedInput)
+        XCTAssertTrue(conversation.hasDraftContent)
+        XCTAssertEqual(conversation.draftPhotoSlots, 0)
+        XCTAssertEqual(conversation.visibleDraftPhotos.map(\.file.name), photos.prefix(10).map(\.name))
+        conversation.removeDraftPhoto(try XCTUnwrap(conversation.draftPhotos.first).id)
+        XCTAssertEqual(conversation.draftPhotoSlots, 1)
+        XCTAssertEqual(conversation.visibleDraftPhotos.first?.file.name, "Photo 2.jpg")
+        for photo in conversation.draftPhotos { conversation.removeDraftPhoto(photo.id) }
+        XCTAssertFalse(conversation.hasDraftContent)
     }
 
     func testReceiptAndRelayedCopyRemainOneInputAcrossHistoryAndLiveDelivery() throws {

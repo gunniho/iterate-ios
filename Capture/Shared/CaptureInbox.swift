@@ -37,7 +37,7 @@ struct CapturedFile: Codable, Sendable {
         self.data = data
     }
 
-    static func read(_ url: URL, suggestedName: String? = nil, type: UTType? = nil) throws -> Self {
+    static func read(_ url: URL, suggestedName: String? = nil, type: UTType? = nil, imageByteLimit: Int = maximumBytes) throws -> Self {
         let attributes = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentTypeKey])
         guard attributes.isRegularFile == true else { throw CaptureIssue.unsupported }
         let name = suggestedName.flatMap { $0.isEmpty ? nil : $0 } ?? url.lastPathComponent
@@ -45,7 +45,7 @@ struct CapturedFile: Codable, Sendable {
         if kind.conforms(to: .image) {
             guard (attributes.fileSize ?? 0) <= 64 * 1024 * 1024 else { throw CaptureIssue.tooLarge }
             guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { throw CaptureIssue.image }
-            return try fromImage(source, name: name)
+            return try fromImage(source, name: name, byteLimit: imageByteLimit)
         }
         guard (attributes.fileSize ?? 0) <= maximumBytes else { throw CaptureIssue.tooLarge }
         let handle = try FileHandle(forReadingFrom: url)
@@ -74,8 +74,9 @@ struct CapturedFile: Codable, Sendable {
         return try fromImage(source, name: name)
     }
 
-    private static func fromImage(_ source: CGImageSource, name: String) throws -> Self {
-        for dimension in [2200, 1600, 1000] {
+    private static func fromImage(_ source: CGImageSource, name: String, byteLimit: Int = maximumBytes) throws -> Self {
+        let dimensions = byteLimit < maximumBytes ? [2200, 1600, 1000, 700] : [2200, 1600, 1000]
+        for dimension in dimensions {
             let options: [CFString: Any] = [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
@@ -91,7 +92,7 @@ struct CapturedFile: Codable, Sendable {
             }
             CGImageDestinationAddImage(output, frame, [kCGImageDestinationLossyCompressionQuality: 0.83] as CFDictionary)
             guard CGImageDestinationFinalize(output) else { throw CaptureIssue.image }
-            if encoded.length <= maximumBytes {
+            if encoded.length <= byteLimit {
                 let stem = ((name as NSString).lastPathComponent as NSString).deletingPathExtension
                 return try Self(name: (stem.isEmpty ? "Photo" : stem) + ".jpg", contentType: "image/jpeg", data: encoded as Data)
             }

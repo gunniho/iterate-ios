@@ -386,6 +386,24 @@ final class ConversationFlowTests: DevMindTestCase {
         chat.close()
     }
 
+    func testPhotoOnlyFirstMessageStartsOneAgentWithAllSelectedFiles() async throws {
+        _ = try await reset()
+        let connection = try await connected()
+        let chat = AgentConversation()
+        chat.addDraftPhotos(try ["one.jpg", "two.jpg"].map {
+            try CapturedFile(name: $0, contentType: "image/jpeg", data: Data([0xFF, 0xD8, 0xFF, 0xD9]))
+        })
+        await chat.sendDraft(using: connection)
+        XCTAssertNil(chat.sendError)
+        XCTAssertFalse(chat.isNewDraft)
+        XCTAssertTrue(chat.visibleDraftPhotos.isEmpty)
+        XCTAssertEqual(chat.messages.first?.files, ["one.jpg", "two.jpg"])
+        await chat.open(on: connection.agentLink)
+        try await wait("reply to photos") { chat.messages.last?.role == .agent }
+        XCTAssertEqual(chat.messages.filter { $0.role == .input }.count, 1)
+        chat.close()
+    }
+
     func testAnOlderMindStillOpensAndPagesConversations() async throws {
         let agents = try await reset()
         try await configure(["legacy": true])

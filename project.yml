@@ -48,7 +48,8 @@ targets:
       - Configuration/Deployment.swift
       - Sources
       - Shared
-      - Native
+      - {path: Native, excludes: [Agents/MermaidVendor]}
+      - {path: Native/Agents/MermaidVendor, type: folder, buildPhase: resources}
       - Intents
       - Capture/App
       - Capture/CameraUI

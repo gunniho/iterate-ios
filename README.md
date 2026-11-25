@@ -8,7 +8,7 @@ The repository is a template. It builds as checked in, with sample settings, and
 
 | Where | What you can do |
 | --- | --- |
-| Agents | Your agents, ordered by recent activity. Open one to read and reply in a native conversation, with replies and typing shown live. Archive from the list. |
+| Agents | Your agents, ordered by recent activity. Open one to read and reply in a native conversation, with replies and typing shown live and Mermaid diagrams drawn on the device. Archive from the list. |
 | New Agent | Type or dictate a first message, or call the agent. The plus adds a photo, a file or your current place, or shares your screen during a call. |
 | Your move | The one screen for what waits for you: outgoing email and agent actions to approve, statements to sign, and questions an agent asked. You sign each decision with a passkey or a key kept on the iPhone. |
 | Lock Screen | An alert when something starts to wait, in one line of what is asked. A Live Activity on the Lock Screen and in the Dynamic Island names the first three things and counts the rest. |
@@ -132,3 +132,5 @@ xcodegen generate --spec project.siri-preview.yml
 Your workspace’s settings live in `Configuration/Local.xcconfig` and, for the backend, in the `settings.js` that setup writes into your mind’s config. Both stay out of this repository, as do signing keys, provisioning profiles and Xcode’s per-user files: `.gitignore` lists them. Keep your Apple push key outside any source checkout. The installer sends it to the mind’s vault, which does not give it back.
 
 This project uses the MIT license. [License](LICENSE)
+
+The app bundles the Mermaid 12.3.0 browser build, MIT licensed, to draw diagrams without a network connection. Its notice is in [`Native/Agents/MermaidVendor/LICENSE`](Native/Agents/MermaidVendor/LICENSE).

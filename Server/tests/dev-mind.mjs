@@ -159,10 +159,15 @@ function append(path, type, payload, extra) {
   publish(path, event);
   return event;
 }
-function message(path, text, key) {
+function message(path, input, key) {
+  const text = typeof input === "string" ? input : input.message;
+  const files = (input?.files ?? []).map(({ filename, contentType, data }) => {
+    if (!(data instanceof Uint8Array) || data.length === 0) throw new Error("Expected attachment bytes");
+    return { filename, contentType, size: data.length };
+  });
   const log = logOf(path);
   if (!log.sent.has(key)) {
-    const event = append(path, E + "message-received", { message: text, from: "/" }, { idempotencyKey: "agent-message:" + key, ...member });
+    const event = append(path, E + "message-received", { message: text, from: "/", ...(files.length && { files }) }, { idempotencyKey: "agent-message:" + key, ...member });
     log.sent.set(key, event);
     const trigger = append(path, E + "context-added", { role: "user", content: text, messageOffset: event.offset });
     const request = append(path, E + "llm-request-requested", { model: "stand-in", expiresAt: Date.now() + 30_000, triggerOffset: trigger.offset });
@@ -318,7 +323,7 @@ const serviceItx = {
     put: async (key, value) => { kv.set(key, value); return { ok: true }; },
     delete: async (key) => { kv.delete(key); return { ok: true }; },
   },
-  agents: { create: async (path) => { logOf(path); }, get: (path) => ({ message: async (input, { key }) => message(path, input.message ?? String(input), key) }) },
+  agents: { create: async (path) => { logOf(path); }, get: (path) => ({ message: async (input, { key }) => message(path, input, key) }) },
   schedules: { set: async () => {}, cancel: async () => {} },
   ai: { run: async () => { throw new Error("Workers AI is offline"); } },
 };

@@ -9,6 +9,7 @@ final class AgentConversation: Hashable {
 
     private struct Outgoing {
         let text: String
+        let photos: [DraftPhoto]
         let key = UUID().uuidString.lowercased()
     }
 
@@ -26,6 +27,28 @@ final class AgentConversation: Hashable {
     var draft = "" {
         didSet { if draft != oldValue { markInput() } }
     }
+    struct DraftPhoto: Identifiable {
+        let id = UUID()
+        let file: CapturedFile
+    }
+
+    static let photoLimit = 10
+    private(set) var draftPhotos: [DraftPhoto] = []
+    var draftPhotoSlots: Int { Self.photoLimit - draftPhotos.count }
+    var visibleDraftPhotos: [DraftPhoto] { (sending || sendError != nil) ? pending?.photos ?? [] : draftPhotos }
+    var hasDraftContent: Bool { !draftPhotos.isEmpty || draft.contains { !$0.isWhitespace } }
+
+    func addDraftPhotos(_ files: [CapturedFile]) {
+        guard isNewDraft, !sending, sendError == nil, draftPhotoSlots > 0, !files.isEmpty else { return }
+        markInput()
+        draftPhotos.append(contentsOf: files.prefix(draftPhotoSlots).map { DraftPhoto(file: $0) })
+    }
+
+    func removeDraftPhoto(_ id: UUID) {
+        guard !sending, sendError == nil else { return }
+        draftPhotos.removeAll { $0.id == id }
+    }
+
     /// Adds words chosen elsewhere, such as an event from Calendar, on a line of their own after what is written.
     func include(_ words: String) {
         let words = words.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -208,11 +231,15 @@ final class AgentConversation: Hashable {
     }
 
     func sendDraft(using connection: MindConnection) async {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !sending, sendError == nil,
+        guard hasDraftContent, !sending, sendError == nil,
               case .paired(let member) = connection.pairing, isNewDraft || connected else { return }
-        let outgoing = pending.flatMap { $0.text == text ? $0 : nil } ?? Outgoing(text: text)
+        let written = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = written.isEmpty ? (draftPhotos.count == 1 ? "See the attached photo." : "See the attached photos.") : written
+        let photoIDs = draftPhotos.map(\.id)
+        let outgoing = pending.flatMap { $0.text == text && $0.photos.map(\.id) == photoIDs ? $0 : nil }
+            ?? Outgoing(text: text, photos: draftPhotos)
         draft = ""
+        draftPhotos = []
         await deliver(outgoing, for: member, using: connection)
     }
 
@@ -224,6 +251,7 @@ final class AgentConversation: Hashable {
     func dismissFailedSend() {
         guard !sending, sendError != nil, let pending else { return }
         if draft.isEmpty { draft = pending.text }
+        draftPhotos = pending.photos
         sendError = nil
     }
 
@@ -240,7 +268,8 @@ final class AgentConversation: Hashable {
                 let session = try await connection.agentSession(for: member)
                 let target = try claimDraft(id, member: member, email: session.email)
                 guard connection.pairing == .paired(member) else { throw AssistantIssue.changedSession }
-                let receipt = try await AgentChatChannel.startAgent(at: target, text: text, key: outgoing.key, on: session.link)
+                let receipt = try await AgentChatChannel.startAgent(at: target, text: text, key: outgoing.key,
+                                                                   photos: outgoing.photos.map(\.file), on: session.link)
                 guard connection.pairing == .paired(member) else { throw AssistantIssue.changedSession }
                 merge([receipt])
                 through = receipt.id
@@ -266,7 +295,11 @@ final class AgentConversation: Hashable {
             firstMessageTitle = String(first.text.prefix { !$0.isNewline }.prefix(80))
         }
         if let pending, let receipt = added.first(where: { $0.sendKey == "agent-message:" + pending.key && $0.text == pending.text }) {
-            if !sending, sendError == nil, draft == pending.text { draft = "" }
+            if !sending, sendError == nil {
+                if draft == pending.text { draft = "" }
+                let sent = Set(pending.photos.map(\.id))
+                draftPhotos.removeAll { sent.contains($0.id) }
+            }
             lastSent = receipt.id
             self.pending = nil
             sendError = nil

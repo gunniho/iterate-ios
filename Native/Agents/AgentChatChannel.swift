@@ -123,20 +123,33 @@ final class AgentChatChannel {
         return try Self.receipt(wire, text: text, key: key)
     }
 
-    static func startAgent(at path: String, text: String, key: String, on socket: MindSocket) async throws -> AgentChatMessage {
+    static func startAgent(at path: String, text: String, key: String, photos: [CapturedFile] = [],
+                           on socket: MindSocket) async throws -> AgentChatMessage {
         let creation = try socket.reference(target: MindSocket.root, path: ["mind", "agents", "create"], arguments: [path])
         defer { socket.release(creation) }
 
-        let afterCreation = firstMessageExpression(after: creation, at: path, text: text, key: key)
+        let afterCreation = firstMessageExpression(after: creation, at: path, text: text, key: key, photos: photos)
         let wire = try await socket.evaluate(afterCreation, timeout: .seconds(75))
         return try receipt(wire, text: text, key: key)
     }
 
-    static func firstMessageExpression(after creation: Int, at path: String, text: String, key: String) -> [Any] {
+    static func firstMessageExpression(after creation: Int, at path: String, text: String, key: String,
+                                       photos: [CapturedFile] = []) -> [Any] {
         // Cap'n Web runs these steps when create succeeds. The captured root is -1 and the
         // steps' results are 1 and 2. Always deliver to the path chosen for this draft.
         let getAgent: [Any] = ["pipeline", -1, ["mind", "agents", "get"], [path]]
-        let message: [Any] = ["pipeline", 1, ["message"], [text, ["key": key]]]
+        let input: Any
+        if photos.isEmpty {
+            input = text
+        } else {
+            // Cap’n Web wraps literal arrays; each bytes expression delivers Uint8Array, not base64 text.
+            let files: [[String: Any]] = photos.map { photo in
+                ["filename": photo.name, "contentType": photo.contentType,
+                 "data": ["bytes", photo.data.base64EncodedString()]]
+            }
+            input = ["message": text, "files": [files]] as [String: Any]
+        }
+        let message: [Any] = ["pipeline", 1, ["message"], [input, ["key": key]]]
         return ["remap", creation, [], [["import", MindSocket.root]], [getAgent, message, ["pipeline", 2]]]
     }
 

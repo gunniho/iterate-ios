@@ -1,3 +1,4 @@
+import ImageIO
 import SwiftUI
 
 @MainActor
@@ -18,6 +19,7 @@ struct AgentConversationView: View {
     @State private var dictation: AgentDictation?
     @State private var call: CallRequest?
     @State private var inputNotice: String?
+    @State private var importingPhotos = false
     @State private var startedCall = false
     // Symbols drawn at a size of their own grow with the reader's text size.
     @ScaledMetric(relativeTo: .title2) private var backSymbol: CGFloat = 22
@@ -128,12 +130,13 @@ struct AgentConversationView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressFeedback())
-        .disabled(conversation.sending || connection.pairing == .checking)
+        .disabled(conversation.sending || importingPhotos || !conversation.visibleDraftPhotos.isEmpty || connection.pairing == .checking)
         .accessibilityLabel("Call agent")
         .accessibilityIdentifier("iterate.chat.call")
     }
 
     private func startCall(sharingScreen: Bool = false) {
+        guard !importingPhotos, conversation.visibleDraftPhotos.isEmpty else { return }
         conversation.markInput()
         dictation?.cancel()
         if let member {
@@ -272,26 +275,36 @@ struct AgentConversationView: View {
                 .padding(.leading, 8)
             } else if let inputNotice {
                 Text(inputNotice).font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 8)
-            } else if conversation.isNewDraft, !conversation.draft.isEmpty, connection.pairing == .unpaired, let pair {
+            } else if conversation.isNewDraft, conversation.hasDraftContent, connection.pairing == .unpaired, let pair {
                 Button("Connect to send", action: pair).tapTarget().padding(.horizontal, 8)
-            } else if conversation.floor != nil, !conversation.isNewDraft || !conversation.draft.isEmpty, let issue {
+            } else if conversation.floor != nil, !conversation.isNewDraft || conversation.hasDraftContent, let issue {
                 HStack {
                     Text(issue).font(.footnote).foregroundStyle(.secondary)
                     Spacer()
                     Button("Try again", action: retryRead).tapTarget()
                 }
                 .padding(.horizontal, 8)
-            } else if conversation.floor != nil, !conversation.draft.isEmpty,
+            } else if conversation.floor != nil, conversation.hasDraftContent,
                       conversation.isNewDraft ? activeLink == nil : !conversation.connected {
                 Text("Connecting…").font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 8)
             }
+            if importingPhotos {
+                ProgressView("Adding photos…").font(.footnote).padding(.horizontal, 8)
+            }
+            if !conversation.visibleDraftPhotos.isEmpty { draftPhotoRow }
             HStack(alignment: .bottom, spacing: 0) {
                 if conversation.isNewDraft {
-                    IterateCaptureView(menuAction: { dictation?.cancel() }, include: { words in
+                    IterateCaptureView(menuAction: {
+                        dictation?.cancel()
+                        composerFocused = false
+                    }, include: { words in
                         inputNotice = nil
                         conversation.include(words)
                         composerFocused = true
-                    }, shareScreen: { startCall(sharingScreen: true) })
+                    }, shareScreen: conversation.draftPhotos.isEmpty ? { startCall(sharingScreen: true) } : nil,
+                       photoSlots: conversation.draftPhotoSlots, addPhotos: { conversation.addDraftPhotos($0) },
+                       importingPhotos: { importingPhotos = $0 })
+                    .disabled(conversation.sending || conversation.sendError != nil)
                 }
                 TextField(conversation.isNewDraft ? "Message a new agent" : "Message", text: Binding(
                     get: { conversation.draft },
@@ -304,7 +317,7 @@ struct AgentConversationView: View {
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .accessibilityIdentifier("iterate.chat.input")
                 dictationButton
-                if conversation.sending || conversation.draft.contains(where: { !$0.isWhitespace }) {
+                if conversation.sending || conversation.hasDraftContent {
                     Button {
                         dictation?.cancel()
                         Task { await conversation.sendDraft(using: connection) }
@@ -313,7 +326,7 @@ struct AgentConversationView: View {
                             .font(.system(size: sendSymbol))
                             .tapTarget()
                     }
-                    .disabled(conversation.sending || conversation.sendError != nil ||
+                    .disabled(conversation.sending || importingPhotos || conversation.sendError != nil ||
                               (conversation.isNewDraft ? member == nil : !conversation.connected))
                     .accessibilityLabel("Send message")
                     .accessibilityIdentifier("iterate.chat.send")
@@ -323,6 +336,38 @@ struct AgentConversationView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 9)
+    }
+
+    private var draftPhotoRow: some View {
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: 8) {
+                ForEach(Array(conversation.visibleDraftPhotos.enumerated()), id: \.element.id) { index, photo in
+                    ZStack(alignment: .topTrailing) {
+                        AgentDraftThumbnail(data: photo.file.data)
+                            .accessibilityLabel("Photo \(index + 1)")
+                        if !conversation.sending, conversation.sendError == nil, !importingPhotos {
+                            Button {
+                                conversation.removeDraftPhoto(photo.id)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 20, weight: .semibold))
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(.white, .black.opacity(0.8))
+                                    .frame(width: 44, height: 44, alignment: .topTrailing)
+                                    .padding(3)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Remove photo \(index + 1)")
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+        }
+        .scrollIndicators(.hidden)
+        .frame(height: 68)
+        .accessibilityIdentifier("iterate.chat.draftPhotos")
     }
 
     private var dictationButton: some View {
@@ -401,8 +446,20 @@ private struct ChatMessageRow: View {
                     Text(sender).font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 }
                 if !message.text.isEmpty {
-                    if message.role == .agent, let formatted = MessageMarkdown.formatted(message.text) {
-                        Text(formatted)
+                    if message.allowsMermaid {
+                        ForEach(Array(MessageMarkdown.parts(message.text).enumerated()), id: \.offset) { _, part in
+                            switch part {
+                            case let .markdown(text):
+                                if !text.isEmpty { inlineMarkdown(text) }
+                            case let .literal(text):
+                                Text(verbatim: text).font(.system(.footnote, design: .monospaced))
+                            case let .diagram(source, fallback):
+                                AgentMermaidDiagram(source: source, fallback: fallback)
+                                    .id(source)
+                            }
+                        }
+                    } else if message.role == .agent {
+                        inlineMarkdown(message.text)
                     } else { Text(verbatim: message.text) }
                 }
                 ForEach(Array(message.files.enumerated()), id: \.offset) { _, name in
@@ -418,6 +475,11 @@ private struct ChatMessageRow: View {
         .accessibilityValue(([message.text] + message.files).filter { !$0.isEmpty }.joined(separator: "\n"))
         .accessibilityIdentifier("iterate.chat.message")
     }
+
+    @ViewBuilder private func inlineMarkdown(_ text: String) -> some View {
+        if let formatted = MessageMarkdown.formatted(text) { Text(formatted) }
+        else { Text(verbatim: text) }
+    }
 }
 
 /// An agent's reply with its inline Markdown read once, not on every pass of a scrolling list.
@@ -429,6 +491,20 @@ private enum MessageMarkdown {
         cache.countLimit = 400
         return cache
     }()
+
+    private final class Parts { let value: [AgentReplyPart]; init(_ value: [AgentReplyPart]) { self.value = value } }
+    private static let partsCache: NSCache<NSString, Parts> = {
+        let cache = NSCache<NSString, Parts>()
+        cache.countLimit = 200
+        return cache
+    }()
+
+    static func parts(_ source: String) -> [AgentReplyPart] {
+        if let cached = partsCache.object(forKey: source as NSString) { return cached.value }
+        let parts = AgentReplyPart.parse(source)
+        partsCache.setObject(Parts(parts), forKey: source as NSString)
+        return parts
+    }
 
     static func formatted(_ source: String) -> AttributedString? {
         if let known = cache.object(forKey: source as NSString) { return known.text }
@@ -510,4 +586,29 @@ private struct MessageBubble: ViewModifier {
 
 private extension View {
     func messageBubble(outgoing: Bool) -> some View { modifier(MessageBubble(outgoing: outgoing)) }
+}
+
+private struct AgentDraftThumbnail: View {
+    let data: Data
+    @State private var image: CGImage?
+
+    var body: some View {
+        ZStack {
+            Color.secondary.opacity(0.14)
+            if let image {
+                Image(decorative: image, scale: 1).resizable().scaledToFill()
+            } else {
+                Image(systemName: "photo").foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 68, height: 68)
+        .clipShape(.rect(cornerRadius: 12))
+        .task {
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return }
+            image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceThumbnailMaxPixelSize: 208
+            ] as CFDictionary)
+        }
+    }
 }

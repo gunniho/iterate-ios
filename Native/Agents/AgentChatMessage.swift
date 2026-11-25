@@ -10,6 +10,7 @@ struct AgentChatMessage: Identifiable, Equatable {
     let sender: String?
     let sendKey: String?
     let isRelayedCopy: Bool
+    let allowsMermaid: Bool
 
     static let received = "events.iterate.com/agent/message-received"
     static let contextAdded = "events.iterate.com/agent/context-added"
@@ -18,6 +19,7 @@ struct AgentChatMessage: Identifiable, Equatable {
     init?(event: [String: Any]) {
         guard let offset = event["offset"] as? Int, offset > 0,
               let type = event["type"] as? String, let payload = event["payload"] as? [String: Any] else { return nil }
+        allowsMermaid = type == Self.replied
         let key = event["idempotencyKey"] as? String
         var originalOffset: Int?
         switch type {

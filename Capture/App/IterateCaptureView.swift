@@ -13,12 +13,17 @@ struct IterateCaptureView: View {
     private let menuAction: (() -> Void)?
     private let include: ((String) -> Void)?
     private let shareScreen: (() -> Void)?
+    private let photoSlots: Int?
+    private let addPhotos: (([CapturedFile]) -> Void)?
+    private let importingPhotos: ((Bool) -> Void)?
     @State private var showingMenu = false
     @State private var choosingPlace = false
     @State private var chosen: MenuChoice?
     @State private var menuHeight: CGFloat = 520
     @State private var choosingPhoto = false
-    @State private var photo: PhotosPickerItem?
+    @State private var choosingSinglePhoto = false
+    @State private var singlePhoto: PhotosPickerItem?
+    @State private var photos: [PhotosPickerItem] = []
     @State private var edit: CaptureDraft?
     @State private var storedID: UUID?
     @State private var pendingCamera: CaptureDraft?
@@ -36,7 +41,12 @@ struct IterateCaptureView: View {
     /// With `menuAction` this is the composer's plus button and its sheet of actions. `include` adds the
     /// current place, whose words go to the composer, and `shareScreen` screen sharing, which needs a call.
     init(initialMode: IterateCaptureMode = .library, lockedPhotoID: UUID? = nil, menuAction: (() -> Void)? = nil,
-         include: ((String) -> Void)? = nil, shareScreen: (() -> Void)? = nil) {
+         include: ((String) -> Void)? = nil, shareScreen: (() -> Void)? = nil,
+         photoSlots: Int? = nil, addPhotos: (([CapturedFile]) -> Void)? = nil,
+         importingPhotos: ((Bool) -> Void)? = nil) {
+        self.photoSlots = photoSlots
+        self.addPhotos = addPhotos
+        self.importingPhotos = importingPhotos
         self.menuAction = menuAction
         self.include = include
         self.shareScreen = shareScreen
@@ -67,11 +77,13 @@ struct IterateCaptureView: View {
                 .alert("Capture", isPresented: Binding(get: { issue != nil }, set: { if !$0 { issue = nil } })) {
                     Button("OK") { issue = nil }
                 } message: { Text(issue ?? "") }
+                .photosPicker(isPresented: $choosingPhoto, selection: $photos,
+                              maxSelectionCount: max(1, photoSlots ?? 1), selectionBehavior: .ordered, matching: .images)
             } else {
                 captureLibrary
+                    .photosPicker(isPresented: $choosingSinglePhoto, selection: $singlePhoto, matching: .images)
             }
         }
-        .photosPicker(isPresented: $choosingPhoto, selection: $photo, matching: .images)
         .disabled(busy)
         .task {
             guard menuAction == nil else { return }
@@ -93,20 +105,13 @@ struct IterateCaptureView: View {
                 }
             }
         }
-        .task(id: photo) {
-            guard let photo else { return }
-            busy = true
-            issue = nil
-            defer { busy = false }
-            do {
-                guard let item = try await photo.loadTransferable(type: ChosenPhoto.self) else { throw CaptureIssue.image }
-                try Task.checkCancellation()
-                storedID = nil
-                edit = CaptureDraft(attachment: item.attachment)
-            } catch {
-                if !Task.isCancelled { issue = error.localizedDescription }
-            }
-            self.photo = nil
+        .task(id: photos) {
+            guard !photos.isEmpty else { return }
+            await importPhotos(photos)
+        }
+        .task(id: singlePhoto) {
+            guard let singlePhoto else { return }
+            await importPhotos([singlePhoto])
         }
         .fileImporter(isPresented: $choosingFile, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
             switch result {
@@ -176,7 +181,9 @@ struct IterateCaptureView: View {
 
     private func perform(_ choice: MenuChoice) {
         switch choice {
-        case .photo: choosingPhoto = true
+        case .photo:
+            if addPhotos != nil { choosingPhoto = true }
+            else { choosingSinglePhoto = true }
         case .file: choosingFile = true
         case .camera: Task { await openCamera() }
         case .screen: shareScreen?()
@@ -185,7 +192,11 @@ struct IterateCaptureView: View {
     }
 
     @ViewBuilder private var captureActions: some View {
-        Button { choose(.photo) } label: { Label("Choose a photo", systemImage: "photo") }
+        Button { choose(.photo) } label: {
+            Label(photoSlots == nil ? "Choose a photo" : "Choose photos", systemImage: "photo")
+        }
+        .disabled(photoSlots == 0)
+        .accessibilityIdentifier("iterate.chat.choosePhotos")
         Button { choose(.file) } label: { Label("Choose a file", systemImage: "doc") }
         Button { choose(.camera) } label: { Label("Take a photo", systemImage: "camera") }
     }
@@ -258,6 +269,52 @@ struct IterateCaptureView: View {
         camera = true
     }
 
+    private func importPhotos(_ selection: [PhotosPickerItem]) async {
+        busy = true
+        importingPhotos?(true)
+        issue = nil
+        defer {
+            busy = false
+            importingPhotos?(false)
+            if !Task.isCancelled {
+                photos = []
+                singlePhoto = nil
+            }
+        }
+        if let addPhotos {
+            var files: [CapturedFile] = []
+            var failures = 0
+            for (index, photo) in selection.enumerated() {
+                do {
+                    try Task.checkCancellation()
+                    guard let item = try await photo.loadTransferable(type: ChosenDraftPhoto.self) else {
+                        throw CaptureIssue.image
+                    }
+                    files.append(try CapturedFile(name: "Photo \(index + 1).jpg", contentType: item.attachment.contentType,
+                                                  data: item.attachment.data))
+                } catch {
+                    if Task.isCancelled { return }
+                    failures += 1
+                }
+            }
+            guard !Task.isCancelled else { return }
+            addPhotos(files)
+            if failures > 0 {
+                issue = failures == 1 ? "One photo couldn’t be loaded. You can try adding it again."
+                    : "\(failures) photos couldn’t be loaded. You can try adding them again."
+            }
+        } else if let photo = selection.first {
+            do {
+                guard let item = try await photo.loadTransferable(type: ChosenPhoto.self) else { throw CaptureIssue.image }
+                try Task.checkCancellation()
+                storedID = nil
+                edit = CaptureDraft(attachment: item.attachment)
+            } catch {
+                if !Task.isCancelled { issue = error.localizedDescription }
+            }
+        }
+    }
+
     private func importFile(_ url: URL) async {
         busy = true
         issue = nil
@@ -297,6 +354,17 @@ private struct ChosenPhoto: Transferable {
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(importedContentType: .image) { received in
             ChosenPhoto(attachment: try CapturedFile.read(received.file, suggestedName: "Shared photo", type: .image))
+        }
+    }
+}
+
+/// Keep the first-message socket frame bounded even with a full selection.
+private struct ChosenDraftPhoto: Transferable {
+    let attachment: CapturedFile
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .image) { received in
+            ChosenDraftPhoto(attachment: try CapturedFile.read(received.file, suggestedName: "Photo", type: .image,
+                                                               imageByteLimit: 512 * 1024))
         }
     }
 }

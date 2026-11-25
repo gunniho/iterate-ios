@@ -67,6 +67,7 @@
 		66F6C3D705AE64C742BF8E79 /* NativeLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = A79667873B1277F4A03766D9 /* NativeLinks.swift */; };
 		67B8211880E6F21EEE42AB82 /* IterateSafari.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 4DE76009FDEA2A7EC14D9350 /* IterateSafari.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		67F747BE1A90C84A865DF167 /* IterateAnswerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DA81ACB642E1656079C38FB /* IterateAnswerView.swift */; };
+		6846779E63AA34D6A8477696 /* MermaidVendor in Resources */ = {isa = PBXBuildFile; fileRef = DDE11F2D4498AF610A31BCDD /* MermaidVendor */; };
 		689E0307D0C1D192C26F615D /* DraftKeyboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB00A2DF5D5311966248BAAB /* DraftKeyboard.swift */; };
 		6AA48CD7651544945A49D15F /* CredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4EC8F23C62204937463C8D7 /* CredentialStore.swift */; };
 		6C2F20CF73528D0C7B33632A /* YourMoveTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = DADBC96605FA6146EC745437 /* YourMoveTimeline.swift */; };
@@ -81,6 +82,7 @@
 		773A36124957CF870E8D09F9 /* NativeLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = A79667873B1277F4A03766D9 /* NativeLinks.swift */; };
 		79A332C42BF482F59C0F1B71 /* CaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F51D32F29879071149D4D4D5 /* CaptureTests.swift */; };
 		79B51038B299674584D65660 /* Deployment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2396837D87D345A7B294F351 /* Deployment.swift */; };
+		7C0820E36AD250A800349C95 /* AgentMermaid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 959979EB493F1E087064A161 /* AgentMermaid.swift */; };
 		7C12BB3B8A7B9AFDAFA4B037 /* AttentionActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB103A9E8CCAEE7AD7E32A12 /* AttentionActivity.swift */; };
 		7C5147D1F842F03C8B36D10B /* AssistantCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36BED466CEA44EC472F10BCE /* AssistantCenter.swift */; };
 		7C53207CDF38B2CFF10C2317 /* AssistantReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07A958FBF908B44509D6C150 /* AssistantReply.swift */; };
@@ -334,6 +336,7 @@
 		927C6606F564949B6B6633C0 /* Iterate.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Iterate.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9419387269977E8B02D34550 /* ConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionTests.swift; sourceTree = "<group>"; };
 		944F9290A831F10B3382AFC6 /* Deployment.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Deployment.xcconfig; sourceTree = "<group>"; };
+		959979EB493F1E087064A161 /* AgentMermaid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentMermaid.swift; sourceTree = "<group>"; };
 		9760D8F92AEBD6EC5545E51B /* LiveVoice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveVoice.swift; sourceTree = "<group>"; };
 		9CA17C5EE509C380E64204F4 /* IterateAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IterateAgent.swift; sourceTree = "<group>"; };
 		9EFB3124884547741B466B21 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -362,6 +365,7 @@
 		DADBC96605FA6146EC745437 /* YourMoveTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YourMoveTimeline.swift; sourceTree = "<group>"; };
 		DB32A632176D2547D0A77530 /* toolbar-icon.svg */ = {isa = PBXFileReference; path = "toolbar-icon.svg"; sourceTree = "<group>"; };
 		DCFEEB6FB0AE98453D3AEEAF /* popup.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = popup.css; sourceTree = "<group>"; };
+		DDE11F2D4498AF610A31BCDD /* MermaidVendor */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MermaidVendor; path = Native/Agents/MermaidVendor; sourceTree = SOURCE_ROOT; };
 		E5F2C3696D7090945C022675 /* YourMoveTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YourMoveTimelineTests.swift; sourceTree = "<group>"; };
 		E66675C2CC6260D3E6E44E9A /* DevMindTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevMindTests.swift; sourceTree = "<group>"; };
 		EA94225AE4C7804088F1188C /* DeviceInputs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceInputs.swift; sourceTree = "<group>"; };
@@ -672,8 +676,10 @@
 				7C51DC491878813CBACA534A /* AgentConversationView.swift */,
 				4D9272C91D60FC4250703A7A /* AgentDictation.swift */,
 				FDD533ABA0A7700E3F57E193 /* AgentDirectory.swift */,
+				959979EB493F1E087064A161 /* AgentMermaid.swift */,
 				7B359BE0201121D8661A14C8 /* AgentsHome.swift */,
 				9CA17C5EE509C380E64204F4 /* IterateAgent.swift */,
+				DDE11F2D4498AF610A31BCDD /* MermaidVendor */,
 				4134A5822F1E94781A480C12 /* RecentAgentsSnapshot.swift */,
 				B4BAE15D7CD34E1A6E220872 /* RecentAgentsTimeline.swift */,
 			);
@@ -963,6 +969,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				29DFF979BFAA9EFBD75D10F7 /* Assets.xcassets in Resources */,
+				6846779E63AA34D6A8477696 /* MermaidVendor in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -996,6 +1003,7 @@
 				8E0ABA027770FF50B2AA0691 /* AgentConversationView.swift in Sources */,
 				13D63D251E2C6FF25DDD5B6E /* AgentDictation.swift in Sources */,
 				9F5B7F75223786C41AB8F7B2 /* AgentDirectory.swift in Sources */,
+				7C0820E36AD250A800349C95 /* AgentMermaid.swift in Sources */,
 				537F4A82F562F25ADA726C34 /* AgentsHome.swift in Sources */,
 				1E42CFB0AE9C6EBDFD3BC59D /* Alarms.swift in Sources */,
 				6E27A2BF569370BDA7690756 /* ApprovalSigning.swift in Sources */,
